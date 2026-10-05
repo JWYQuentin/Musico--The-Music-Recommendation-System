@@ -66,6 +66,8 @@ python -m m4a_rec.prepare subsample
 python -m m4a_rec.audit               # writes reports/audit.md
 python -m m4a_rec.split               # writes data/processed/splits/
 python -m m4a_rec.evaluate            # prints the val and test ground-truth summary
+python -m m4a_rec.baselines tune      # every grid setting on val, ~10 min; writes reports/baselines_tuning.md
+python -m m4a_rec.baselines report    # chosen settings on val and test; writes reports/baselines.md
 pytest -q
 pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 ```
@@ -82,11 +84,18 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 - The pipeline is a chain of files, one module per step:
   `download` -> `prepare convert` -> `prepare subsample` -> `audit`, then `split` ->
   `evaluate`. Each step reads the previous step's output from `data/`.
+- Model code gets its data through `interactions.py`: `load_train` reads the train splits
+  (and refuses any other name), `build` turns listens into a sparse user-by-track matrix
+  with sorted user and track IDs as the row and column order, and `to_frame` turns a
+  model's `(users, N)` index and score arrays into the frame `evaluate.score` takes,
+  dropping padding and tracks the user played in training. `baselines.py` shows the
+  pattern; later models should reuse it so every model shares one index mapping.
 - Every module is pure functions plus a thin `main()`. The functions take frames, paths
   and plain arguments; only `main()` calls `load_config()` and touches `data/`. Tests call
   the functions on synthetic data built in `tests/conftest.py` and never read `data/`.
   New modules follow the same shape so they can be tested the same way.
-- `load_config()` merges `configs/data.yaml` and `configs/eval.yaml` into one dict, so
+- `load_config()` merges every file under `configs/` (`data.yaml`, `eval.yaml`,
+  `baselines.yaml`) into one dict, so
   top-level keys must not collide across config files. It turns `paths` into absolute
   `Path`s and creates those directories. A new config file has to be added to it.
 - Time ranges are half-open `(start, end]` everywhere: an event exactly on a boundary
@@ -108,7 +117,8 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 - Every design choice gets one entry in `reports/decisions.md`: what, why, alternatives.
 - New logic gets a test in `tests/` with hand-checkable numbers. Run `pytest -q` before
   calling anything done.
-- `reports/audit.md` is generated. Change `audit.py` and rerun; do not edit the report.
+- `reports/audit.md`, `reports/baselines_tuning.md` and `reports/baselines.md` are
+  generated. Change the module that writes them and rerun; do not edit the reports.
 - Use Polars, not pandas. Keep raw data out of git.
 - The owner writes the two-tower forward pass and loss by hand in Phase 4. Review that
   code and explain problems; do not rewrite it unasked.

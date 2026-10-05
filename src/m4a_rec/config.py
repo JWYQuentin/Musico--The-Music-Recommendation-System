@@ -1,4 +1,4 @@
-"""Load configs/data.yaml and configs/eval.yaml and resolve paths against the repo root."""
+"""Load the files under configs/ into one dict and resolve paths against the repo root."""
 from __future__ import annotations
 
 import os
@@ -23,7 +23,8 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
     root = repo_root()
     cfg_path = Path(path) if path else root / "configs" / "data.yaml"
     cfg = yaml.safe_load(cfg_path.read_text())
-    cfg.update(yaml.safe_load((root / "configs" / "eval.yaml").read_text()))
+    for name in ("eval.yaml", "baselines.yaml"):
+        cfg.update(yaml.safe_load((root / "configs" / name).read_text()))
     cfg["root"] = root
     cfg["paths"] = {k: root / v for k, v in cfg["paths"].items()}
     for p in cfg["paths"].values():

@@ -1,0 +1,29 @@
+# Phase 3 baseline settings. Every number here is a decision; log changes in reports/decisions.md.
+
+baselines:
+  train_splits: [retrieval_train]   # the same data the two-tower model gets in Phase 4
+  n_recs: 1000                      # tracks handed in per user; the largest K is 500, the rest is headroom
+  select_on: ndcg@10                # the val metric that picks `chosen` from `grid`
+  seed: 42
+
+  # For each model: `grid` is every setting `tune` tries on val, `chosen` is what `report` fits.
+  popularity:
+    chosen: {count: users, window_days: null}
+    grid:
+      count: [users, listens]         # rank tracks by distinct listeners or by total listens
+      window_days: [null, 180, 90, 28]  # count only the last N days of training; null = all of it
+
+  item_knn:
+    chosen: {weighting: binary, k: 200}
+    grid:
+      weighting: [binary, log]        # matrix cell: 1, or log(1 + plays)
+      k: [50, 200, 500]               # neighbours kept per track
+
+  als:
+    weighting: log                    # confidence = alpha * log(1 + plays)
+    iterations: 15
+    chosen: {factors: 64, regularization: 0.01, alpha: 10}
+    grid:
+      factors: [64, 128]
+      regularization: [0.01, 0.1]
+      alpha: [1, 10, 40]
