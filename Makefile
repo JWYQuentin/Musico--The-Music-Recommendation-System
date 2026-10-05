@@ -1,4 +1,4 @@
-.PHONY: setup download convert subsample audit phase1 split test
+.PHONY: setup download convert subsample audit phase1 split baselines-tune baselines test
 
 setup:
 	python -m venv .venv && .venv/bin/pip install -e ".[dev]"
@@ -19,6 +19,12 @@ phase1: download convert subsample audit
 
 split:
 	python -m m4a_rec.split
+
+baselines-tune:
+	python -m m4a_rec.baselines tune
+
+baselines:
+	python -m m4a_rec.baselines report
 
 test:
 	pytest -q

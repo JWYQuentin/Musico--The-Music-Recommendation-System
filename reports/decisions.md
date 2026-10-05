@@ -143,3 +143,80 @@ time with a random 5% of tracks removed and scored on those tracks.
 Why: no track is naturally new in the final weeks, and holding tracks out of the main
 splits would put a hole in every headline number.
 Rejected: removing 5% of tracks from all training data now.
+
+## Phase 3: baselines (2026-10-05)
+
+Numbers are from `reports/baselines_tuning.md` (`val`) unless they say `test`.
+
+**Baselines are fitted on `retrieval_train` only.**
+Why: it is the data the two-tower model gets in Phase 4, so retrieval comparisons are
+like-for-like, and these fitted models can supply candidates for ranker training in
+Phase 5 without having seen its labels.
+Cost: at validation time the baselines are four weeks staler than they could be. They can
+recommend the 56,166 tracks in `retrieval_train`; coverage is still measured against the
+56,189 tracks in both train splits.
+To settle in Phase 5: whether the finished two-stage system also needs baselines fitted
+on both train splits as a like-for-like opponent (`train_splits` in
+`configs/baselines.yaml`).
+Rejected: fitting on both train splits now.
+
+**Item-kNN and ALS come from the `implicit` library.**
+Why: one library and one calling pattern for both models, and the least code to maintain.
+Rejected: a hand-written item-kNN in SciPy, where every step can be checked by hand but
+which is slower and about 40 lines longer.
+
+**Selection rule: the setting with the highest NDCG@10 on `val`.**
+Why: the top-10 list is what the finished system is judged on.
+Caveat: within each model the best two settings are often 0.0002 or less apart, which is
+probably noise. ALS is the one exception to the rule; see its entry below.
+
+**Popularity: distinct listeners over the last 180 days of training.**
+Why: ranking by listeners beats ranking by total plays at every window length (NDCG@10
+0.0061 against 0.0046 at best), because repeat plays let a few heavy listeners lift a
+track. The window matters less: 180 days and all of training are tied (0.0061 and
+0.0060), and 90 and 28 days are worse (0.0046).
+Rejected: total plays; shorter windows.
+
+**Item-kNN: cosine similarity on log(1 + plays), 500 neighbours per track.**
+Why: log weighting beats binary (0.0261 against 0.0245 at best). The neighbour count
+barely matters: NDCG@10 runs from 0.0241 to 0.0261 across 50, 200 and 500. `implicit`
+counts the track itself as one of the neighbours.
+Rejected: 200 neighbours, a near-tie (0.0259) with slightly better Recall@500 (0.281
+against 0.278); 50 neighbours, which leaves 1.5% of users with fewer than 500 tracks.
+
+**ALS: 256 factors, regularization 0.1, alpha 10, 15 iterations; confidence is alpha x log(1 + plays).**
+This is not the NDCG@10 winner. With 256 factors, alpha 1 scores NDCG@10 = 0.0275 and
+alpha 10 scores 0.0265, but alpha 10 has Recall@100 = 0.130 against 0.119 and
+Recall@500 = 0.330 against 0.304.
+Why: Phase 4 compares the two-tower model on Recall@100 and Recall@500, and ALS is the
+strongest opponent there. The owner chose the setting that is strongest at that depth and
+accepted a 4% lower NDCG@10.
+Other findings: alpha 40 is clearly worse; regularization (0.01 or 0.1) makes no visible
+difference; more factors help, with each doubling giving about half the gain of the one
+before (Recall@500 at alpha 10: 0.304, 0.323, 0.330 for 64, 128, 256).
+Not tuned: the log weighting and the 15 iterations.
+Rejected: alpha 1, the rule's pick; 512 factors, not tried because the gains were
+already halving.
+
+**Each model hands in 1,000 tracks per user, already cleared of the user's training plays.**
+Why: the largest K is 500, and the evaluator also drops plays the model has not seen
+(`ranker_train` and, for `test`, `val`). For popularity and ALS, short@500 equals the
+share of users with no recommendations at all on both `val` and `test`, so 1,000 is
+enough. The evaluator still does its own filtering.
+Rejected: unfiltered lists, which would have to be far longer for heavy listeners.
+
+**Users who are not in `retrieval_train` get no recommendations.**
+59 users first appear after it ends. They are 0.51% of the users scored on `val` and
+0.53% on `test`, and they score 0 for every model.
+Why: no model has seen them, and a fallback would be an extra rule for half a percent of
+users.
+Rejected: giving unknown users the popularity list.
+
+**`test` is scored once, after the settings are frozen.**
+`tune` reads `val` only. `report` was run on 2026-10-05 after the owner confirmed the
+settings, and rerun with the same settings only to confirm that the numbers repeat. They
+do, to the 4 places reported; a float mean differs in its 16th digit from run to run, so
+`reports/baselines.json` keeps 6 places.
+Result on `test`: popularity, item-kNN and ALS score NDCG@10 = 0.0060, 0.0262 and 0.0265
+and Recall@500 = 0.094, 0.275 and 0.330, each within 0.003 of its `val` figure.
+Rejected: looking at `test` while tuning.
