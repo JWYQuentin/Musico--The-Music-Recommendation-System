@@ -8,13 +8,13 @@ baselines:
 
   # For each model: `grid` is every setting `tune` tries on val, `chosen` is what `report` fits.
   popularity:
-    chosen: {count: users, window_days: null}
+    chosen: {count: users, window_days: 180}
     grid:
       count: [users, listens]         # rank tracks by distinct listeners or by total listens
       window_days: [null, 180, 90, 28]  # count only the last N days of training; null = all of it
 
   item_knn:
-    chosen: {weighting: binary, k: 200}
+    chosen: {weighting: log, k: 500}
     grid:
       weighting: [binary, log]        # matrix cell: 1, or log(1 + plays)
       k: [50, 200, 500]               # neighbours kept per track
@@ -22,8 +22,9 @@ baselines:
   als:
     weighting: log                    # confidence = alpha * log(1 + plays)
     iterations: 15
-    chosen: {factors: 64, regularization: 0.01, alpha: 10}
+    # Not the select_on winner: alpha 1 has the best ndcg@10, alpha 10 the best recall@100 and @500.
+    chosen: {factors: 256, regularization: 0.1, alpha: 10}
     grid:
-      factors: [64, 128]
+      factors: [64, 128, 256]
       regularization: [0.01, 0.1]
       alpha: [1, 10, 40]

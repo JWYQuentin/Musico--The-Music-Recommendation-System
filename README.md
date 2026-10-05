@@ -1,14 +1,14 @@
 # Two-stage music recommender on Music4All-Onion
 
 A retrieval-then-ranking recommender: a two-tower neural network picks candidate tracks,
-and a gradient-boosted model ranks them. Work in progress; Phases 1 and 2 of 6 are done.
+and a gradient-boosted model ranks them. Work in progress; Phases 1 to 3 of 6 are done.
 
 ## Phase 1: get the data and audit it
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q                             # 27 tests, a few seconds
+pytest -q                             # 40 tests, a few seconds
 
 python -m m4a_rec.download            # about 3 GB from Zenodo
 python -m m4a_rec.prepare convert     # slow: decompresses 2.2 GB of bz2
@@ -57,14 +57,41 @@ Every model hands `evaluate.score(recs, "val")` a Polars frame with `user_id`,
 `track_id` and `score`. Only `evaluate.py` reads `val` and `test`; `tests/test_leakage.py`
 fails if any other module names those files.
 
+## Phase 3: baselines
+
+```bash
+python -m m4a_rec.baselines tune      # every grid setting on val, about 15 minutes
+python -m m4a_rec.baselines report    # the chosen settings on val and test, about 2 minutes
+```
+
+Three standard recommenders, fitted on `retrieval_train` and tuned on `val`: the most
+popular tracks, item-kNN, and ALS matrix factorisation (the last two from the `implicit`
+library). Results on `test`, 10,280 users:
+
+| Model | Recall@10 | NDCG@10 | Recall@100 | Recall@500 | Coverage@10 |
+|---|---|---|---|---|---|
+| Popularity | 0.0041 | 0.0060 | 0.0291 | 0.0936 | 0.1% |
+| Item-kNN | 0.0203 | 0.0262 | 0.1044 | 0.2754 | 20.7% |
+| ALS | 0.0234 | 0.0265 | 0.1300 | 0.3298 | 22.0% |
+
+For scale, random recommendations score Recall@10 = 0.00015 on `val`. The numbers are
+low because only tracks new to the user count, out of a catalogue of 56,000. ALS and
+item-kNN are level at the top of the list; ALS finds more of a user's new tracks deeper
+down, and popularity recommends almost the same few tracks to everyone.
+
+All four K values are in `reports/baselines.md`, the tuning grid in
+`reports/baselines_tuning.md`, and the reasons for each setting in `reports/decisions.md`.
+
 ## Layout
 
 ```
 configs/data.yaml      every Phase 1 setting
 configs/eval.yaml      split lengths and K values
-src/m4a_rec/           download.py, prepare.py, audit.py, split.py, evaluate.py
+configs/baselines.yaml baseline grids and chosen settings
+src/m4a_rec/           download.py, prepare.py, audit.py, split.py, evaluate.py,
+                       interactions.py, baselines.py
 tests/                 run on synthetic data in the real file layout
-reports/               audit.md (generated), decisions.md
+reports/               audit.md, baselines.md, baselines_tuning.md (generated), decisions.md
 CLAUDE.md              project brief and rules for Claude Code
 ```
 

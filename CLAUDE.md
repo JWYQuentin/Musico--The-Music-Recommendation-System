@@ -15,8 +15,10 @@ small live demo. The owner is learning PyTorch through this project.
 - Phase 1 (setup and data audit): done on the real data, 2026-10-04. The answers to the
   five audit questions are in `reports/decisions.md`.
 - Phase 2 (temporal splits, metrics, leakage tests): done, 2026-10-04.
-- Phases 3-6: not started. See README.md for the plan.
-- `pyproject.toml` lists only what Phases 1-2 use. Add a phase's libraries there when the
+- Phase 3 (popularity, item-kNN and ALS baselines): done, 2026-10-05. Results are in
+  `reports/baselines.md`; ALS is the one to beat (test Recall@500 = 0.330, NDCG@10 = 0.0265).
+- Phases 4-6: not started. See README.md for the plan.
+- `pyproject.toml` lists only what Phases 1-3 use. Add a phase's libraries there when the
   phase starts.
 
 ## Data
@@ -66,8 +68,8 @@ python -m m4a_rec.prepare subsample
 python -m m4a_rec.audit               # writes reports/audit.md
 python -m m4a_rec.split               # writes data/processed/splits/
 python -m m4a_rec.evaluate            # prints the val and test ground-truth summary
-python -m m4a_rec.baselines tune      # every grid setting on val, ~10 min; writes reports/baselines_tuning.md
-python -m m4a_rec.baselines report    # chosen settings on val and test; writes reports/baselines.md
+python -m m4a_rec.baselines tune      # every grid setting on val, ~15 min; writes reports/baselines_tuning.md
+python -m m4a_rec.baselines report    # chosen settings on val and test, ~2 min; writes reports/baselines.md
 pytest -q
 pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 ```

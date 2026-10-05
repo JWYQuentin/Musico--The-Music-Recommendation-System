@@ -189,7 +189,9 @@ def main(argv: list[str] | None = None) -> int:
         for name in MODELS:
             recs = fit_recommend(name, events, b, b[name]["chosen"])
             results[name] = {"params": b[name]["chosen"], "val": score(recs, "val"), "test": score(recs, "test")}
-        (reports / "baselines.json").write_text(json.dumps(results, indent=2) + "\n")
+        # 6 places in the file: the last digits of a float mean change from run to run
+        stable = json.loads(json.dumps(results), parse_float=lambda x: round(float(x), 6))
+        (reports / "baselines.json").write_text(json.dumps(stable, indent=2) + "\n")
         (reports / "baselines.md").write_text(render_report(results, b["train_splits"], ks))
         print(f"wrote {reports / 'baselines.md'}")
     return 0
