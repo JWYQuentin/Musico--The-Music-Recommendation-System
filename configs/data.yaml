@@ -1,0 +1,33 @@
+# Phase 1 data settings. Every number here is a decision; log changes in reports/decisions.md.
+
+paths:
+  raw: data/raw
+  interim: data/interim
+  processed: data/processed
+  reports: reports
+
+zenodo_record: "6609677"
+
+# name -> md5 (from the Zenodo record page). Only ~3 GB of the 15 GB release.
+files:
+  userid_trackid_timestamp.tsv.bz2: dfe82201036765f7463e6f3ce3d0f991
+  id_ivec256.tsv.bz2: ae244a772e1e6711c34d94530e429d6f
+  id_lyrics_word2vec.tsv.bz2: d0f247bdb645e35955cd40c802ef2af2
+  id_genres_tf-idf.tsv.bz2: a742b5fa1d2e2ce780101773e57bb7f5
+  id_tags_dict.tsv.bz2: 9c1ca4a3e04a9696b9449ec54ac40cd5
+
+events_file: userid_trackid_timestamp.tsv.bz2
+
+# Content-feature files checked for track coverage in the audit.
+feature_files:
+  audio_ivec256: id_ivec256.tsv.bz2
+  lyrics_word2vec: id_lyrics_word2vec.tsv.bz2
+  genres_tfidf: id_genres_tf-idf.tsv.bz2
+  tags: id_tags_dict.tsv.bz2
+
+subsample:
+  window_months: 13        # 10 retrieval-train + 1 ranker-train + 2 wk val + 2 wk test, plus slack
+  window_end: null         # null = last timestamp in the data; set "YYYY-MM-DD" if the tail is thin
+  min_user_listens: 50     # users below this inside the window are dropped before sampling
+  n_users: 20000
+  seed: 42

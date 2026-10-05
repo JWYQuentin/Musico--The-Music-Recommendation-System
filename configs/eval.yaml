@@ -1,0 +1,11 @@
+# Phase 2 evaluation settings. Every number here is a decision; log changes in reports/decisions.md.
+
+# Split lengths, counted back from the last timestamp in data/processed/events.parquet.
+# Whole weeks, so every period has the same weekday mix. retrieval_train is whatever is left.
+split:
+  test_days: 14
+  val_days: 14
+  ranker_train_days: 28
+
+metrics:
+  ks: [10, 20, 100, 500]   # 10 and 20 for final lists, 100 and 500 for retrieval candidates
