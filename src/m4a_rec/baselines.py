@@ -9,7 +9,6 @@ Usage: python -m m4a_rec.baselines tune | report
 """
 from __future__ import annotations
 
-import itertools
 import json
 import sys
 import warnings
@@ -24,6 +23,7 @@ from implicit.utils import ParameterWarning
 from .config import load_config
 from .evaluate import score
 from .interactions import Interactions, build, load_train, to_frame
+from .reporting import grid_points, metric_tables, stable_json, table
 
 MODELS = ["popularity", "item_knn", "als"]
 BATCH = 1000  # users ranked at a time in popularity
@@ -105,17 +105,6 @@ def fit_recommend(name: str, events: pl.DataFrame, cfg: dict, params: dict) -> p
     return als(inter, n, iterations=fixed["iterations"], seed=cfg["seed"], **params)
 
 
-def grid_points(grid: dict) -> list[dict]:
-    """Every combination of the listed values, one dict per combination."""
-    return [dict(zip(grid, values)) for values in itertools.product(*grid.values())]
-
-
-def _table(header: list[str], rows: list[list]) -> list[str]:
-    fmt = lambda v: f"{v:.4f}" if isinstance(v, float) else str(v)  # noqa: E731
-    lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
-    return lines + ["| " + " | ".join(fmt(v) for v in row) + " |" for row in rows] + [""]
-
-
 def render_tuning(rows: list[dict], select_on: str, ks: list[int]) -> str:
     """One table per model, best setting first. Each row is {model, params, metrics}."""
     shown = list(dict.fromkeys([select_on, *(f"recall@{k}" for k in ks), f"coverage@{ks[0]}", f"short@{ks[-1]}"]))
@@ -131,7 +120,7 @@ def render_tuning(rows: list[dict], select_on: str, ks: list[int]) -> str:
         mine = sorted((r for r in rows if r["model"] == name), key=lambda r: -r["metrics"][select_on])
         keys = list(mine[0]["params"])
         L += [f"## {name}", ""]
-        L += _table(
+        L += table(
             keys + shown,
             [[r["params"][k] for k in keys] + [r["metrics"][m] for m in shown] for r in mine],
         )
@@ -148,23 +137,8 @@ def render_report(results: dict, train_splits: list[str], ks: list[int]) -> str:
         f"Fitted on {' + '.join(train_splits)} with the settings chosen on val:",
         "",
     ]
-    L += _table(["Model", "Setting"], [[name, json.dumps(r["params"])] for name, r in results.items()])
-    titles = {
-        "recall": "Recall@K",
-        "ndcg": "NDCG@K",
-        "coverage": "Coverage@K: share of training tracks that reach some user's top K",
-        "short": "Short@K: share of users handed fewer than K tracks",
-    }
-    for split in ("val", "test"):
-        users = next(iter(results.values()))[split]["users"]
-        L += [f"## {split} ({users:,} users scored)", ""]
-        for metric, title in titles.items():
-            L += [title, ""]
-            L += _table(
-                ["Model", *(f"@{k}" for k in ks)],
-                [[name, *(r[split][f"{metric}@{k}"] for k in ks)] for name, r in results.items()],
-            )
-    return "\n".join(L)
+    L += table(["Model", "Setting"], [[name, json.dumps(r["params"])] for name, r in results.items()])
+    return "\n".join(L + metric_tables(results, ks))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -189,9 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         for name in MODELS:
             recs = fit_recommend(name, events, b, b[name]["chosen"])
             results[name] = {"params": b[name]["chosen"], "val": score(recs, "val"), "test": score(recs, "test")}
-        # 6 places in the file: the last digits of a float mean change from run to run
-        stable = json.loads(json.dumps(results), parse_float=lambda x: round(float(x), 6))
-        (reports / "baselines.json").write_text(json.dumps(stable, indent=2) + "\n")
+        (reports / "baselines.json").write_text(stable_json(results))
         (reports / "baselines.md").write_text(render_report(results, b["train_splits"], ks))
         print(f"wrote {reports / 'baselines.md'}")
     return 0

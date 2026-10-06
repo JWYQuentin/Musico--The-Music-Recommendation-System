@@ -17,8 +17,12 @@ small live demo. The owner is learning PyTorch through this project.
 - Phase 2 (temporal splits, metrics, leakage tests): done, 2026-10-04.
 - Phase 3 (popularity, item-kNN and ALS baselines): done, 2026-10-05. Results are in
   `reports/baselines.md`; ALS is the one to beat (test Recall@500 = 0.330, NDCG@10 = 0.0265).
-- Phases 4-6: not started. See README.md for the plan.
-- `pyproject.toml` lists only what Phases 1-3 use. Add a phase's libraries there when the
+- Phase 4 (two-tower retrieval, cold-start test): in progress since 2026-10-05. The code
+  is complete, including the owner's three functions in `src/m4a_rec/twotower.py`
+  (written 2026-10-06), and all tests pass. Tuning on `val` and the `test` report are
+  still to do.
+- Phases 5-6: not started. See README.md for the plan.
+- `pyproject.toml` lists only what Phases 1-4 use. Add a phase's libraries there when the
   phase starts.
 
 ## Data
@@ -121,6 +125,9 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
   calling anything done.
 - `reports/audit.md`, `reports/baselines_tuning.md` and `reports/baselines.md` are
   generated. Change the module that writes them and rerun; do not edit the reports.
+- FAISS and PyTorch abort the process if both are loaded (two OpenMP runtimes on macOS).
+  `src/m4a_rec/index.py` is the only module that imports `faiss`; it must not import
+  `torch` or any module that does, and its tests run it in a subprocess.
 - Use Polars, not pandas. Keep raw data out of git.
 - The owner writes the two-tower forward pass and loss by hand in Phase 4. Review that
   code and explain problems; do not rewrite it unasked.

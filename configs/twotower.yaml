@@ -1,0 +1,46 @@
+# Phase 4 two-tower settings. Every number here is a decision; log changes in reports/decisions.md.
+
+twotower:
+  train_splits: [retrieval_train]   # the same data the Phase 3 baselines were fitted on
+  n_recs: 1000                      # tracks handed in per user, as in Phase 3
+  select_on: recall@100             # the val metric that stops training and picks `chosen`
+  seed: 42
+  device: auto                      # the Apple GPU (mps) if PyTorch can use it, else cpu
+  batch_size: 4096                  # (user, track) pairs per step; the other 4095 tracks are the wrong answers
+  max_epochs: 30
+  patience: 3                       # stop after this many epochs without a better select_on
+
+  # What the track tower is given. The user tower always gets the user ID.
+  models:
+    tt_id: {use_id: true, use_content: false}
+    tt_hybrid: {use_id: true, use_content: true}
+    tt_content: {use_id: false, use_content: true}
+
+  # One setting per model; `report` trains these. Placeholders until tuning on val is done.
+  chosen:
+    tt_id: &defaults
+      dim: 128              # length of the user and track vectors
+      temperature: 0.1      # scores are divided by this before the softmax
+      lr: 0.003
+      log_q: false          # correct for popular tracks turning up more often as wrong answers
+      mask_duplicates: false  # ignore a wrong answer that is the same track as the right one
+      sampling: pairs       # pairs: every (user, track) pair once per epoch; log_plays: in proportion to log(1 + plays)
+      hidden: 256           # width of the track tower's hidden layer (content models only)
+      dropout: 0.0
+    tt_hybrid: *defaults
+    tt_content: *defaults
+
+  # Tuned on val in stages. Each stage tries its combinations on top of the best setting so far.
+  stages:
+    tt_id:
+      - {temperature: [0.05, 0.1, 0.2], lr: [0.003, 0.01]}
+      - {dim: [64, 256]}
+      - {log_q: [true]}
+      - {mask_duplicates: [true]}
+      - {sampling: [log_plays]}
+    tt_hybrid:
+      - {hidden: [256, 512], dropout: [0.0, 0.2]}
+
+cold_start:
+  fraction: 0.05   # share of training tracks held out, with all their listens
+  seed: 42
