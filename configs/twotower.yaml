@@ -16,27 +16,28 @@ twotower:
     tt_hybrid: {use_id: true, use_content: true}
     tt_content: {use_id: false, use_content: true}
 
-  # One setting per model; `report` trains these. Placeholders until tuning on val is done.
+  # One setting per model; `report` trains these. tt_id is the winner of its stages below;
+  # the content models start from it and tune only the hidden layer.
   chosen:
     tt_id: &defaults
-      dim: 128              # length of the user and track vectors
+      dim: 256              # length of the user and track vectors
       temperature: 0.1      # scores are divided by this before the softmax
       lr: 0.003
-      log_q: false          # correct for popular tracks turning up more often as wrong answers
-      mask_duplicates: false  # ignore a wrong answer that is the same track as the right one
+      log_q: true           # correct for popular tracks turning up more often as wrong answers
+      mask_duplicates: true   # ignore a wrong answer that is the same track as the right one
       sampling: pairs       # pairs: every (user, track) pair once per epoch; log_plays: in proportion to log(1 + plays)
       hidden: 256           # width of the track tower's hidden layer (content models only)
       dropout: 0.0
-    tt_hybrid: *defaults
-    tt_content: *defaults
+    tt_hybrid: &content {<<: *defaults, dropout: 0.2}   # the winner of its stage below
+    tt_content: *content                                # reuses the hybrid setting
 
   # Tuned on val in stages. Each stage tries its combinations on top of the best setting so far.
   stages:
     tt_id:
+      - {log_q: [false, true]}       # first: without it Recall@100 is 0.094, with it 0.138
+      - {mask_duplicates: [true]}
       - {temperature: [0.05, 0.1, 0.2], lr: [0.003, 0.01]}
       - {dim: [64, 256]}
-      - {log_q: [true]}
-      - {mask_duplicates: [true]}
       - {sampling: [log_plays]}
     tt_hybrid:
       - {hidden: [256, 512], dropout: [0.0, 0.2]}

@@ -1,7 +1,8 @@
 """Train a two-tower model and turn its vectors into recommendations.
 
   tune <model>  the stages in configs/twotower.yaml for tt_id or tt_hybrid, scored on val.
-                Writes reports/twotower_tuning.md.
+                Writes reports/twotower_tuning.md. Settings already in
+                reports/twotower_tuning.json are not run again; delete it to start over.
   report        tt_id and tt_hybrid with their chosen settings, scored on val and test beside
                 the Phase 3 baselines. Writes reports/retrieval.md and saves each model's
                 vectors under data/processed/models/.
@@ -271,19 +272,23 @@ def main(argv: list[str] | None = None) -> int:
         return fit(inter, features, t["models"][name], params, t, on_val, log=lambda m: print(m, flush=True))
 
     if argv[0] == "tune":
-        name, rows = argv[1], []
+        name, saved = argv[1], reports / "twotower_tuning.json"
+        runs = json.loads(saved.read_text()) if saved.exists() else {}
+        rows = runs.setdefault(name, [])
 
         def run(params: dict) -> float:
-            result = train(name, params)
-            rows.append({"params": params, "epoch": result["epoch"], "metrics": result["metrics"]})
-            return result["metrics"][t["select_on"]]
+            # A setting already in the saved file is not trained again, and the file is written
+            # after every run, so an interrupted session picks up where it stopped.
+            done = next((r for r in rows if r["params"] == params), None)
+            if done is None:
+                result = train(name, params)
+                done = {"params": params, "epoch": result["epoch"], "metrics": result["metrics"]}
+                rows.append(done)
+                saved.write_text(json.dumps(runs, indent=2) + "\n")
+                (reports / "twotower_tuning.md").write_text(render_tuning(runs, t["select_on"], ks))
+            return done["metrics"][t["select_on"]]
 
         best, _ = staged_search(t["chosen"][name], t["stages"][name], run)
-        saved = reports / "twotower_tuning.json"
-        runs = json.loads(saved.read_text()) if saved.exists() else {}
-        runs[name] = rows
-        saved.write_text(json.dumps(runs, indent=2) + "\n")
-        (reports / "twotower_tuning.md").write_text(render_tuning(runs, t["select_on"], ks))
         print(f"best {name}: {best}\nwrote {reports / 'twotower_tuning.md'}")
     else:
         results = json.loads((reports / "baselines.json").read_text())

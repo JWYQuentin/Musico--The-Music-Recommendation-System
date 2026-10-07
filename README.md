@@ -1,14 +1,14 @@
 # Two-stage music recommender on Music4All-Onion
 
 A retrieval-then-ranking recommender: a two-tower neural network picks candidate tracks,
-and a gradient-boosted model ranks them. Work in progress; Phases 1 to 3 of 6 are done.
+and a gradient-boosted model ranks them. Work in progress; Phases 1 to 4 of 6 are done.
 
 ## Phase 1: get the data and audit it
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q                             # 40 tests, a few seconds
+pytest -q                             # 81 tests, a few seconds
 
 python -m m4a_rec.download            # about 3 GB from Zenodo
 python -m m4a_rec.prepare convert     # slow: decompresses 2.2 GB of bz2
@@ -82,16 +82,68 @@ down, and popularity recommends almost the same few tracks to everyone.
 All four K values are in `reports/baselines.md`, the tuning grid in
 `reports/baselines_tuning.md`, and the reasons for each setting in `reports/decisions.md`.
 
+## Phase 4: two-tower retrieval and cold start
+
+```bash
+python -m m4a_rec.features                 # content features, about 30 seconds
+python -m m4a_rec.retrieval tune tt_id     # tuning on val, about 10 minutes a run; also tt_hybrid
+python -m m4a_rec.retrieval report         # tt_id and tt_hybrid on val and test, about 25 minutes
+python -m m4a_rec.coldstart report         # the cold-start test, about 10 minutes
+python -m m4a_rec.index data/processed/models/tt_id   # FAISS index for the demo
+```
+
+A two-tower model in PyTorch: one network turns a user into a vector, another turns a
+track into a vector, and a track is recommended when the two line up. Three versions
+differ in what the track network is given: the track's ID (`tt_id`), its ID plus audio,
+lyrics and genre features (`tt_hybrid`), or the features alone (`tt_content`). All are
+trained on `retrieval_train` with an in-batch softmax loss that corrects for track
+popularity.
+
+Results on `test`, 10,280 users, beside the Phase 3 baselines:
+
+| Model | Recall@10 | NDCG@10 | Recall@100 | Recall@500 | Coverage@10 |
+|---|---|---|---|---|---|
+| Popularity | 0.0041 | 0.0060 | 0.0291 | 0.0936 | 0.1% |
+| Item-kNN | 0.0203 | 0.0262 | 0.1044 | 0.2754 | 20.7% |
+| ALS | 0.0234 | 0.0265 | 0.1300 | 0.3298 | 22.0% |
+| `tt_id` | 0.0258 | 0.0304 | 0.1390 | 0.3438 | 28.9% |
+| `tt_hybrid` | 0.0261 | 0.0307 | 0.1390 | 0.3450 | 28.8% |
+
+Both two-tower models beat ALS: by 7% on Recall@100 and about 15% on NDCG@10. The
+popularity correction in the loss mattered more than any other setting; without it the
+model scored below item-kNN on `val`. Content features add nothing for tracks that
+already have listens.
+
+They matter for tracks that have none. In the cold-start test, 2,808 tracks (5%) are
+removed from training entirely and models are scored on those tracks alone. Results on
+`test`, 4,004 users:
+
+| Model | Recall@10 | NDCG@10 | Recall@100 |
+|---|---|---|---|
+| `tt_content` | 0.0575 | 0.0313 | 0.2804 |
+| Content similarity, no training | 0.0369 | 0.0197 | 0.1983 |
+| Random | 0.0021 | 0.0011 | 0.0369 |
+| Popularity, item-kNN, ALS | 0 | 0 | 0 |
+
+The content-only model finds 28% of a user's new held-out tracks in its top 100, and
+training it adds about 41% over comparing raw features directly.
+
+Full tables are in `reports/retrieval.md` and `reports/coldstart.md`, the tuning runs in
+`reports/twotower_tuning.md`.
+
 ## Layout
 
 ```
 configs/data.yaml      every Phase 1 setting
 configs/eval.yaml      split lengths and K values
 configs/baselines.yaml baseline grids and chosen settings
+configs/twotower.yaml  two-tower settings, tuning stages, cold-start hold-out
 src/m4a_rec/           download.py, prepare.py, audit.py, split.py, evaluate.py,
-                       interactions.py, baselines.py
+                       interactions.py, baselines.py, features.py, twotower.py,
+                       retrieval.py, coldstart.py, index.py, reporting.py
 tests/                 run on synthetic data in the real file layout
-reports/               audit.md, baselines.md, baselines_tuning.md (generated), decisions.md
+reports/               decisions.md, and generated reports for the audit, baselines,
+                       retrieval and cold start
 CLAUDE.md              project brief and rules for Claude Code
 ```
 
