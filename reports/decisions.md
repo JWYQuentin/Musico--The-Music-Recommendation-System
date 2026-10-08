@@ -216,7 +216,155 @@ Rejected: giving unknown users the popularity list.
 `tune` reads `val` only. `report` was run on 2026-10-05 after the owner confirmed the
 settings, and rerun with the same settings only to confirm that the numbers repeat. They
 do, to the 4 places reported; a float mean differs in its 16th digit from run to run, so
-`reports/baselines.json` keeps 6 places.
+`reports/baselines.json` keeps a fixed number of places: 10 since Phase 4. The original 6
+made one cell print differently when the saved numbers were read back.
 Result on `test`: popularity, item-kNN and ALS score NDCG@10 = 0.0060, 0.0262 and 0.0265
 and Recall@500 = 0.094, 0.275 and 0.330, each within 0.003 of its `val` figure.
 Rejected: looking at `test` while tuning.
+
+## Phase 4: two-tower retrieval and cold start (2026-10-07)
+
+Numbers are from `reports/twotower_tuning.md` (`val`) unless they say `test`. Recall@100
+for ALS on `val` is 0.130.
+
+**Three two-tower models that differ only in what the track tower is given.**
+`tt_id` gets the track ID, `tt_hybrid` the ID plus content features, `tt_content` the
+content features alone. The user tower is one trainable vector per user in all three.
+Why: each answers one question. `tt_id` has the same information as ALS, so it checks the
+training; `tt_hybrid` shows whether content helps for known tracks; `tt_content` can
+score a track nobody has played.
+Rejected: per-feature ablations; a user tower built from listening history, which would
+handle new users, but only 0.5% of scored users are new.
+
+**The owner wrote the towers' forward passes and the loss.**
+`UserTower.forward`, `TrackTower.forward` and `in_batch_softmax_loss` in
+`src/m4a_rec/twotower.py`, against tests with hand-worked numbers. On the real data their
+loss and Recall@100 match a separately written reference to four decimals over the first
+four epochs.
+
+**A score is the dot product of two unit-length vectors, divided by a temperature of 0.1.**
+Why: unit vectors keep every score between -1 and 1, so popularity cannot enter through
+vector length, and the temperature sets how sharply the loss separates right from wrong.
+At 128 numbers per vector, 0.1 gives Recall@100 = 0.138, 0.05 gives 0.120 and 0.2 gives
+0.115.
+
+**Loss: in-batch softmax with the log-q correction.**
+In a batch of 4,096 (user, track) pairs, each user's own track is the right answer and
+the other tracks in the batch are the wrong ones. The log of each track's share of the
+training pairs is subtracted from its scores.
+Why: popular tracks turn up as wrong answers in proportion to their popularity, so the
+plain loss pushes them down too far. Without the correction `tt_id` scores Recall@100 =
+0.094 and puts 72% of the catalogue in someone's top 10; with it, 0.138 and 30%. This
+was the largest effect of any setting.
+Rejected: the plain loss.
+
+**Duplicate masking stays on although it changes nothing measurable.**
+A wrong answer that is the same track as the right one is ignored. Recall@100 is 0.1381
+with and without it: with 56,166 tracks the same track rarely appears twice in a batch.
+Why keep it: it is the correct form of the loss and costs nothing.
+
+**Training examples: every unique (user, track) pair once per epoch.**
+4.8 million pairs from `retrieval_train`.
+Rejected: drawing pairs in proportion to log(1 + plays), which scores 0.136 against
+0.142.
+
+**256 numbers per vector, Adam with learning rate 0.003.**
+Recall@100 is 0.129, 0.138 and 0.142 for 64, 128 and 256. 256 is the largest size tried
+and the size ALS uses, so the comparison is like-for-like. Learning rates 0.003 and 0.01
+give 0.138 and 0.137.
+Embedding rows start at about length 1 (standard deviation 1/sqrt(size)). With
+PyTorch's default, about sqrt(size), each optimizer step is a much smaller turn of the
+vector and `tt_id` reached only Recall@100 = 0.002 after two epochs.
+Rejected: 512, not tried because the gain had already halved.
+
+**Training stops on Recall@100 on `val`: patience 3, at most 30 epochs.**
+After every epoch the model's recommendations go through `evaluate.score`; model code
+never reads `val` itself. Runs stopped after 9 to 20 epochs of about 25 to 55 seconds.
+Why Recall@100: this model's job is to hand candidates to the ranker.
+Caveat: the kept epoch is the best of several noisy `val` readings, so `val` figures are
+slightly flattering. `test` is the clean number.
+
+**Settings are tuned in stages, not as a full grid.**
+Each stage tries its values on top of the best setting so far: 11 runs for `tt_id`, 4
+for `tt_hybrid`.
+Why: the full grid is 144 runs of about 9 minutes each.
+Cost: settings in different stages are never varied together.
+The loss corrections were moved to the first stage after the first run showed the plain
+loss far behind ALS.
+
+**Content features: audio (100 numbers), lyrics (300), genres (685) and a has-lyrics flag.**
+Audio and lyrics columns are scaled to mean 0 and standard deviation 1; genre rows are
+scaled to length 1. The audio vector has 100 numbers despite the "256" in its file name.
+Lyrics rule, left open in Phase 1: the 9.9% of tracks with an all-zero lyrics vector are
+left out when the scaling is measured, keep zeros afterwards, and get has-lyrics = 0.
+The scaling is measured over every training track, including the cold-start hold-out:
+these numbers describe the track itself and exist before anyone plays it.
+Rejected: Last.fm tags. Listeners add them after release, so a new track has none, and
+using them would leak popularity into the cold-start test.
+
+**Content part of the track tower: one hidden layer of 256 with dropout 0.2, added to the ID vector before scaling.**
+The four settings tried (hidden 256 or 512, dropout 0 or 0.2) give Recall@100 between
+0.136 and 0.141.
+Not tried: joining the two parts side by side and adding another layer.
+
+**Finding: content features add nothing for tracks with play history.**
+`tt_hybrid` scores Recall@100 = 0.141 against 0.142 for `tt_id` on `val`, and both score
+0.139 on `test`.
+
+**Cold-start test: a seeded random 5% of training tracks (2,808) lose all their listens.**
+`tt_content` is trained without them, with the hybrid's setting, and stops on
+cold-start Recall@100. It is then scored with only the held-out tracks as candidates and
+as relevant tracks (`evaluate.score(..., only_tracks=...)`), under the usual rule: played
+in the period, not played before. 4,044 users can be scored this way on `val`.
+Why artificial: no track is naturally new in the final weeks (Phase 1, answer 5).
+Two references need no training: `content_sim` recommends the held-out tracks closest to
+the average of what the user played, with the three kinds of feature weighted equally;
+`random` orders them with no information. Popularity, item-kNN and ALS cannot recommend a
+track with no listens and score 0.
+On `test`, with 4,004 users, Recall@100 is 0.280 for `tt_content`, 0.198 for `content_sim`
+and 0.037 for `random`, so training adds about 41% over using the features directly. On
+`val` the three score 0.301, 0.201 and 0.038.
+Rejected: scoring the held-out tracks against their removed training listens, which
+gives more pairs but drops the rule that the test period comes after training.
+
+**Finding: without the track ID the model is much weaker on known tracks.**
+Scored on all tracks, `tt_content` reaches Recall@100 = 0.092 on `test` against 0.139 for
+`tt_id`.
+
+**Recommendations are computed by scoring every track; the FAISS index is exact and separate.**
+Why: with 56,166 tracks a full score matrix per 1,000 users is instant, and it lets each
+user's played tracks be masked before the top 1,000 are taken. The index is for the
+Phase 6 demo and is checked against plain numpy.
+FAISS and PyTorch abort the process when loaded together on macOS, so the index is built
+by its own command and tested in a subprocess.
+Rejected: an approximate index, which only pays off for far larger catalogues.
+
+**Only the user and track vectors are saved, not the model weights.**
+Why: the vectors are all that Phase 5 and the demo read.
+
+**Training on the Apple GPU is not exactly repeatable, and that is accepted.**
+The same setting gives slightly different numbers from run to run: `tt_hybrid` scored
+Recall@100 = 0.1409 on `val` in tuning and 0.1414 in the report run, and `tt_content`
+scored 0.291 and 0.301 on the cold-start `val` test. The cold-start figure moves more
+because its kept epoch is picked on a noisier metric from 4,044 users.
+Why accepted: no difference is large enough to change a conclusion, and the CPU, which
+does repeat exactly, takes twice as long per epoch.
+Cost: rerunning `report` will not reproduce the tables to the last digit.
+
+**`test` was scored once, after the owner confirmed the settings on 2026-10-07.**
+`tune` and `coldstart val` read `val` only. The Phase 3 baselines were rescored in the
+same session with their frozen settings, only to save their results with more decimal
+places; `reports/baselines.md` came out unchanged.
+Result on `test`, 10,280 users:
+
+| Model | Recall@10 | NDCG@10 | Recall@100 | Recall@500 |
+|---|---|---|---|---|
+| ALS | 0.0234 | 0.0265 | 0.1300 | 0.3298 |
+| `tt_id` | 0.0258 | 0.0304 | 0.1390 | 0.3438 |
+| `tt_hybrid` | 0.0261 | 0.0307 | 0.1390 | 0.3450 |
+
+Both two-tower models beat ALS on every measure: by 7% on Recall@100, 4 to 5% on
+Recall@500 and 14 to 16% on NDCG@10. The margins are smaller than on `val` (9% and 20 to
+21%), as expected when the kept epoch is picked on `val`.
+For Phase 5: `tt_id` and `tt_hybrid` are equally good candidate generators. `tt_id` is
+the simpler of the two.

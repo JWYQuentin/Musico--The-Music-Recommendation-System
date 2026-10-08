@@ -72,9 +72,18 @@ def truth(splits_dir: Path, split: str) -> tuple[pl.DataFrame, pl.DataFrame, int
     return relevant(history, load(split)), history.unique(), n_catalog
 
 
-def score(recs: pl.DataFrame, split: str) -> dict:
+def only(recs: pl.DataFrame, rel: pl.DataFrame, tracks: list[str]) -> tuple[pl.DataFrame, pl.DataFrame, int]:
+    """Recommendations, relevant pairs and catalogue size when only `tracks` count."""
+    keep = pl.col("track_id").is_in(tracks)
+    return recs.filter(keep), rel.filter(keep), len(tracks)
+
+
+def score(recs: pl.DataFrame, split: str, only_tracks: list[str] | None = None) -> dict:
+    """Metrics on val or test. With `only_tracks`, as if those were the only tracks in the catalogue."""
     cfg = load_config()
     rel, seen, n_catalog = truth(cfg["paths"]["processed"] / "splits", split)
+    if only_tracks is not None:
+        recs, rel, n_catalog = only(recs, rel, only_tracks)
     return metrics(recs, rel, seen, cfg["metrics"]["ks"], n_catalog)
 
 

@@ -2,7 +2,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from m4a_rec.evaluate import PAIR, metrics, relevant
+from m4a_rec.evaluate import PAIR, metrics, only, relevant
 
 NO_SEEN = pl.DataFrame({"user_id": [], "track_id": []}, schema={"user_id": pl.Int64, "track_id": pl.String})
 
@@ -70,3 +70,14 @@ def test_perfect_scores_one_and_random_scores_near_zero():
     )
     m = metrics(random, rel, NO_SEEN, ks=[10], n_catalog=10_000)
     assert m["recall@10"] < 0.02  # expected 10 / 10,000 = 0.001
+
+
+def test_only_some_tracks_count():
+    # Keep b and c. u1 now wants {b} and is shown b; u2 wants {c} and is shown c.
+    recs_, rel, n_catalog = only(RECS, RELEVANT, ["b", "c", "z"])
+    assert recs_["track_id"].to_list() == ["b", "c"]
+    assert rel.rows() == [(1, "b"), (2, "c")]
+    m = metrics(recs_, rel, NO_SEEN, ks=[2], n_catalog=n_catalog)
+    assert m["recall@2"] == pytest.approx(1.0)
+    assert m["ndcg@2"] == pytest.approx(1.0)  # each is now first in its list
+    assert m["coverage@2"] == pytest.approx(2 / 3)  # b and c out of b, c, z

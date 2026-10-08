@@ -17,8 +17,13 @@ small live demo. The owner is learning PyTorch through this project.
 - Phase 2 (temporal splits, metrics, leakage tests): done, 2026-10-04.
 - Phase 3 (popularity, item-kNN and ALS baselines): done, 2026-10-05. Results are in
   `reports/baselines.md`; ALS is the one to beat (test Recall@500 = 0.330, NDCG@10 = 0.0265).
-- Phases 4-6: not started. See README.md for the plan.
-- `pyproject.toml` lists only what Phases 1-3 use. Add a phase's libraries there when the
+- Phase 4 (two-tower retrieval, cold-start test): done, 2026-10-07. Results are in
+  `reports/retrieval.md` and `reports/coldstart.md`. `tt_id` and `tt_hybrid` both beat
+  ALS (test Recall@100 = 0.139 against 0.130) and are level with each other; `tt_content`
+  handles tracks with no listens. Their vectors are saved under `data/processed/models/`
+  for Phase 5.
+- Phases 5-6: not started. See README.md for the plan.
+- `pyproject.toml` lists only what Phases 1-4 use. Add a phase's libraries there when the
   phase starts.
 
 ## Data
@@ -27,7 +32,7 @@ Music4All-Onion, Zenodo record 6609677, CC BY 4.0. Listening events come from La
 | File | Contents |
 |---|---|
 | `data/raw/userid_trackid_timestamp.tsv.bz2` | one row per listen: user, track, time |
-| `data/raw/id_ivec256.tsv.bz2` | audio i-vector per track |
+| `data/raw/id_ivec256.tsv.bz2` | audio i-vector per track: 100 numbers, despite the name |
 | `data/raw/id_lyrics_word2vec.tsv.bz2` | lyrics embedding per track |
 | `data/raw/id_genres_tf-idf.tsv.bz2` | genre TF-IDF per track |
 | `data/raw/id_tags_dict.tsv.bz2` | Last.fm tags per track |
@@ -35,6 +40,8 @@ Music4All-Onion, Zenodo record 6609677, CC BY 4.0. Listening events come from La
 | `data/processed/events.parquet` | the working subsample: `user_id` (Int64), `track_id` (string), `timestamp` (datetime, stored as milliseconds, values are whole seconds), sorted by user then time |
 | `data/processed/splits/{retrieval_train,ranker_train,val,test}.parquet` | the subsample cut by time; same columns |
 | `data/processed/events.meta.json`, `data/processed/splits/splits.meta.json` | written beside the data: window and split boundaries, user and listen counts |
+| `data/processed/features.npz` | standardised audio, lyrics and genre features for every training track, with `track_ids` |
+| `data/processed/models/<model>/` | a trained two-tower model's `user_vecs.npy`, `track_vecs.npy`, the IDs their rows belong to, and `tracks.faiss` |
 
 - There are no likes, skips, or play durations. A row means "user played track at time".
 - Track titles, artists, and genre names are NOT in Onion. They come from the base
@@ -54,6 +61,8 @@ Music4All-Onion, Zenodo record 6609677, CC BY 4.0. Listening events come from La
 - `score` returns a flat dict: `users`, then `recall@K`, `ndcg@K`, `coverage@K` and
   `short@K` for each K in `configs/eval.yaml`. `short@K` is the share of users left with
   fewer than K tracks after the filter; if it is not near 0, the model handed in too few.
+- `score(recs, split, only_tracks=[...])` scores as if those were the only tracks in the
+  catalogue. The cold-start test uses it.
 - For `test`, "already played" includes `val` plays, which no model has seen. Averages
   run over users with at least one relevant track; a user with no recommendations scores
   0. Coverage is measured against the tracks in the two train splits.
@@ -70,6 +79,12 @@ python -m m4a_rec.split               # writes data/processed/splits/
 python -m m4a_rec.evaluate            # prints the val and test ground-truth summary
 python -m m4a_rec.baselines tune      # every grid setting on val, ~15 min; writes reports/baselines_tuning.md
 python -m m4a_rec.baselines report    # chosen settings on val and test, ~2 min; writes reports/baselines.md
+python -m m4a_rec.features            # ~30 s; writes data/processed/features.npz
+python -m m4a_rec.retrieval tune tt_id   # or tt_hybrid; ~10 min per run, resumes from reports/twotower_tuning.json
+python -m m4a_rec.retrieval report    # tt_id and tt_hybrid on val and test, ~30 min; writes reports/retrieval.md
+python -m m4a_rec.coldstart val       # cold-start test on val only, prints, ~10 min
+python -m m4a_rec.coldstart report    # the same on val and test; writes reports/coldstart.md
+python -m m4a_rec.index data/processed/models/tt_id   # builds and checks the FAISS index
 pytest -q
 pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 ```
@@ -92,12 +107,18 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
   model's `(users, N)` index and score arrays into the frame `evaluate.score` takes,
   dropping padding and tracks the user played in training. `baselines.py` shows the
   pattern; later models should reuse it so every model shares one index mapping.
+- The two-tower code is split by job. `twotower.py` holds the towers and the loss (the
+  owner's code). `retrieval.py` trains them (`fit`), stops on a metric handed in as a
+  function, and ranks tracks for every user (`top_unseen`, `recommend`). `features.py`
+  supplies the content matrix in the same track order as `interactions.build`.
+  `coldstart.py` reuses `fit` with some tracks left out. `reporting.py` has the table
+  and JSON helpers every report uses.
 - Every module is pure functions plus a thin `main()`. The functions take frames, paths
   and plain arguments; only `main()` calls `load_config()` and touches `data/`. Tests call
   the functions on synthetic data built in `tests/conftest.py` and never read `data/`.
   New modules follow the same shape so they can be tested the same way.
 - `load_config()` merges every file under `configs/` (`data.yaml`, `eval.yaml`,
-  `baselines.yaml`) into one dict, so
+  `baselines.yaml`, `twotower.yaml`) into one dict, so
   top-level keys must not collide across config files. It turns `paths` into absolute
   `Path`s and creates those directories. A new config file has to be added to it.
 - Time ranges are half-open `(start, end]` everywhere: an event exactly on a boundary
@@ -119,8 +140,11 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 - Every design choice gets one entry in `reports/decisions.md`: what, why, alternatives.
 - New logic gets a test in `tests/` with hand-checkable numbers. Run `pytest -q` before
   calling anything done.
-- `reports/audit.md`, `reports/baselines_tuning.md` and `reports/baselines.md` are
-  generated. Change the module that writes them and rerun; do not edit the reports.
+- Every file in `reports/` except `decisions.md` is generated. Change the module that
+  writes it and rerun; do not edit the reports.
+- FAISS and PyTorch abort the process if both are loaded (two OpenMP runtimes on macOS).
+  `src/m4a_rec/index.py` is the only module that imports `faiss`; it must not import
+  `torch` or any module that does, and its tests run it in a subprocess.
 - Use Polars, not pandas. Keep raw data out of git.
 - The owner writes the two-tower forward pass and loss by hand in Phase 4. Review that
   code and explain problems; do not rewrite it unasked.

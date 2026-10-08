@@ -11,6 +11,8 @@ dependencies = [
     "matplotlib>=3.8",
     "scipy>=1.11",
     "implicit>=0.7.3",
+    "torch>=2.4",
+    "faiss-cpu>=1.9",
 ]
 
 [project.optional-dependencies]
