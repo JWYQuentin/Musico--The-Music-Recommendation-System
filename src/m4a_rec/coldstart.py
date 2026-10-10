@@ -23,6 +23,7 @@ from .config import load_config
 from .evaluate import score
 from .features import load_blocks
 from .interactions import build, load_train
+from .rank_features import unit
 from .reporting import metric_tables, stable_json
 from .retrieval import fit, recommend, save
 
@@ -42,12 +43,6 @@ def without(matrix: sp.csr_matrix, tracks: np.ndarray) -> sp.csr_matrix:
     out = (matrix @ sp.diags(keep)).tocsr()
     out.eliminate_zeros()
     return out
-
-
-def unit(x: np.ndarray) -> np.ndarray:
-    """Each row scaled to length 1; an all-zero row stays zero."""
-    length = np.linalg.norm(x, axis=1, keepdims=True)
-    return (x / np.where(length > 0, length, 1)).astype(np.float32)
 
 
 def content_sim_vecs(matrix: sp.csr_matrix, blocks: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:

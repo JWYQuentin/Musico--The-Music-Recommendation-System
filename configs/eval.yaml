@@ -9,3 +9,8 @@ split:
 
 metrics:
   ks: [10, 20, 100, 500]   # 10 and 20 for final lists, 100 and 500 for retrieval candidates
+
+# Interval on the difference between two models: users are resampled with replacement.
+bootstrap:
+  n: 2000
+  seed: 42

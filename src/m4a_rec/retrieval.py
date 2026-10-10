@@ -6,8 +6,11 @@
   report        tt_id and tt_hybrid with their chosen settings, scored on val and test beside
                 the Phase 3 baselines. Writes reports/retrieval.md and saves each model's
                 vectors under data/processed/models/.
+  refit         tt_id with its chosen setting, trained on both train splits for Phase 5.
+                Saves its vectors as tt_id_refit and its recommendations under
+                data/processed/recs/. Scores nothing on test.
 
-Usage: python -m m4a_rec.retrieval tune tt_id | tune tt_hybrid | report
+Usage: python -m m4a_rec.retrieval tune tt_id | tune tt_hybrid | report | refit
 """
 from __future__ import annotations
 
@@ -23,10 +26,10 @@ import scipy.sparse as sp
 import torch
 
 from .config import load_config
-from .evaluate import score
+from .evaluate import TRAIN, score
 from .features import load as load_features
 from .interactions import Interactions, build, load_train, to_frame
-from .reporting import grid_points, metric_tables, stable_json, table
+from .reporting import metric_tables, stable_json, staged_search, table
 from .twotower import TrackTower, UserTower, in_batch_softmax_loss
 
 BATCH = 1000  # users scored at a time when ranking tracks
@@ -190,22 +193,6 @@ def fit(
     return {**best, "history": history}
 
 
-def staged_search(start: dict, stages: list[dict], run: Callable[[dict], float]) -> tuple[dict, list]:
-    """Tune one stage at a time. `run(params)` returns the metric to maximise.
-
-    Each stage tries every combination of its values on top of the best setting found in
-    the stages before it. Returns the best setting and every (params, metric) tried, in order.
-    """
-    best, tried = dict(start), []
-    for stage in stages:
-        for point in grid_points(stage):
-            params = {**best, **point}
-            if all(params != seen for seen, _ in tried):
-                tried.append((params, run(params)))
-        best = max(tried, key=lambda t: t[1])[0]
-    return best, tried
-
-
 def save(directory: Path, inter: Interactions, result: dict, params: dict) -> None:
     """The vectors and the IDs their rows belong to. Phase 5 and the FAISS index read these."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -259,11 +246,11 @@ def main(argv: list[str] | None = None) -> int:
     cfg = load_config()
     t, ks, reports = cfg["twotower"], cfg["metrics"]["ks"], cfg["paths"]["reports"]
     tunable = list(t["stages"])
-    if argv != ["report"] and not (len(argv) == 2 and argv[0] == "tune" and argv[1] in tunable):
+    if argv not in (["report"], ["refit"]) and not (len(argv) == 2 and argv[0] == "tune" and argv[1] in tunable):
         print(__doc__)
         return 2
     processed = cfg["paths"]["processed"]
-    inter = build(load_train(processed / "splits", t["train_splits"]), "log")
+    inter = build(load_train(processed / "splits", TRAIN if argv == ["refit"] else t["train_splits"]), "log")
     features = load_features(processed / "features.npz", inter.track_ids.to_list())
 
     def train(name: str, params: dict) -> dict:
@@ -290,6 +277,14 @@ def main(argv: list[str] | None = None) -> int:
 
         best, _ = staged_search(t["chosen"][name], t["stages"][name], run)
         print(f"best {name}: {best}\nwrote {reports / 'twotower_tuning.md'}")
+    elif argv[0] == "refit":
+        params = t["chosen"]["tt_id"]
+        result = train("tt_id", params)
+        save(processed / "models" / "tt_id_refit", inter, result, params)
+        (processed / "recs").mkdir(exist_ok=True)
+        recs = recommend(inter, result["user_vecs"], result["track_vecs"], t["n_recs"])
+        recs.write_parquet(processed / "recs" / "tt_id.parquet", compression="zstd")
+        print(f"kept epoch {result['epoch']}; wrote {processed / 'recs' / 'tt_id.parquet'}")
     else:
         results = json.loads((reports / "baselines.json").read_text())
         for name in tunable:

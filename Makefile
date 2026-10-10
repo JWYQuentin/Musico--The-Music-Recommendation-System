@@ -1,4 +1,4 @@
-.PHONY: setup download convert subsample audit phase1 split baselines-tune baselines features retrieval coldstart test
+.PHONY: setup download convert subsample audit phase1 split baselines-tune baselines features retrieval coldstart refit candidates ranker-tune ranker test
 
 setup:
 	python -m venv .venv && .venv/bin/pip install -e ".[dev]"
@@ -34,6 +34,20 @@ retrieval:
 
 coldstart:
 	python -m m4a_rec.coldstart report
+
+refit:
+	python -m m4a_rec.baselines refit
+	python -m m4a_rec.retrieval refit
+
+candidates:
+	python -m m4a_rec.candidates
+
+ranker-tune:
+	python -m m4a_rec.ranker tune
+	python -m m4a_rec.ranker ablate
+
+ranker:
+	python -m m4a_rec.ranker report
 
 test:
 	pytest -q

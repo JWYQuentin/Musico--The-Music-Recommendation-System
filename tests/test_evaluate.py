@@ -2,7 +2,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from m4a_rec.evaluate import PAIR, metrics, only, relevant
+from m4a_rec.evaluate import PAIR, metrics, only, paired_difference, per_user, relevant
 
 NO_SEEN = pl.DataFrame({"user_id": [], "track_id": []}, schema={"user_id": pl.Int64, "track_id": pl.String})
 
@@ -81,3 +81,35 @@ def test_only_some_tracks_count():
     assert m["recall@2"] == pytest.approx(1.0)
     assert m["ndcg@2"] == pytest.approx(1.0)  # each is now first in its list
     assert m["coverage@2"] == pytest.approx(2 / 3)  # b and c out of b, c, z
+
+
+def test_per_user_hand_checked():
+    users, ranked = per_user(RECS, RELEVANT, NO_SEEN, ks=[2])
+    assert users["user_id"].to_list() == [1, 2]
+    assert users["recall@2"].to_list() == pytest.approx([1 / 2, 1])  # u1 finds a but not b; u2 finds c
+    ideal_2 = 1 + 1 / np.log2(3)
+    assert users["ndcg@2"].to_list() == pytest.approx([1 / ideal_2, 1 / np.log2(3)])  # a is first; c is second
+    assert users["n@2"].to_list() == [2, 2]
+    assert ranked.filter(pl.col("rank") <= 2).height == 4
+    # the means of these columns are what metrics() reports
+    m = metrics(RECS, RELEVANT, NO_SEEN, ks=[2], n_catalog=6)
+    assert m["recall@2"] == pytest.approx(users["recall@2"].mean())
+    assert m["ndcg@2"] == pytest.approx(users["ndcg@2"].mean())
+
+
+def frame(values):
+    return pl.DataFrame({"user_id": list(range(len(values))), "ndcg@10": values})
+
+
+def test_paired_difference_hand_checked():
+    # a beats b by exactly 0.5 for every user, so every resample gives 0.5
+    same_gap = paired_difference(frame([1.0, 0.5, 0.75]), frame([0.5, 0.0, 0.25]), ["ndcg@10"], n_boot=200, seed=0)
+    assert same_gap["ndcg@10"] == pytest.approx({"diff": 0.5, "low": 0.5, "high": 0.5})
+    # a wins by 1 for half the users and loses by 1 for the other half: no difference on average
+    mixed = paired_difference(frame([1.0, 0.0] * 50), frame([0.0, 1.0] * 50), ["ndcg@10"], n_boot=2000, seed=0)
+    assert mixed["ndcg@10"]["diff"] == pytest.approx(0.0)
+    assert mixed["ndcg@10"]["low"] < 0 < mixed["ndcg@10"]["high"]
+    # 100 users with standard deviation 1: the 95% interval is about 1.96 / sqrt(100) = 0.196 either side
+    assert mixed["ndcg@10"]["high"] == pytest.approx(0.196, abs=0.04)
+    again = paired_difference(frame([1.0, 0.0] * 50), frame([0.0, 1.0] * 50), ["ndcg@10"], n_boot=2000, seed=0)
+    assert again == mixed  # seeded

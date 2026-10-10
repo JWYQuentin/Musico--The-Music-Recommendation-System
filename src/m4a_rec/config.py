@@ -23,7 +23,7 @@ def load_config(path: str | Path | None = None) -> dict[str, Any]:
     root = repo_root()
     cfg_path = Path(path) if path else root / "configs" / "data.yaml"
     cfg = yaml.safe_load(cfg_path.read_text())
-    for name in ("eval.yaml", "baselines.yaml", "twotower.yaml"):
+    for name in ("eval.yaml", "baselines.yaml", "twotower.yaml", "ranker.yaml"):
         cfg.update(yaml.safe_load((root / "configs" / name).read_text()))
     cfg["root"] = root
     cfg["paths"] = {k: root / v for k, v in cfg["paths"].items()}

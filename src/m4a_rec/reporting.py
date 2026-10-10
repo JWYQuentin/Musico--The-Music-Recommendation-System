@@ -3,11 +3,28 @@ from __future__ import annotations
 
 import itertools
 import json
+from collections.abc import Callable
 
 
 def grid_points(grid: dict) -> list[dict]:
     """Every combination of the listed values, one dict per combination."""
     return [dict(zip(grid, values)) for values in itertools.product(*grid.values())]
+
+
+def staged_search(start: dict, stages: list[dict], run: Callable[[dict], float]) -> tuple[dict, list]:
+    """Tune one stage at a time. `run(params)` returns the metric to maximise.
+
+    Each stage tries every combination of its values on top of the best setting found in
+    the stages before it. Returns the best setting and every (params, metric) tried, in order.
+    """
+    best, tried = dict(start), []
+    for stage in stages:
+        for point in grid_points(stage):
+            params = {**best, **point}
+            if all(params != seen for seen, _ in tried):
+                tried.append((params, run(params)))
+        best = max(tried, key=lambda t: t[1])[0]
+    return best, tried
 
 
 def table(header: list[str], rows: list[list]) -> list[str]:

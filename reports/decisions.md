@@ -368,3 +368,224 @@ Recall@500 and 14 to 16% on NDCG@10. The margins are smaller than on `val` (9% a
 21%), as expected when the kept epoch is picked on `val`.
 For Phase 5: `tt_id` and `tt_hybrid` are equally good candidate generators. `tt_id` is
 the simpler of the two.
+
+## Phase 5: ranker (2026-10-08)
+
+Numbers are on `val` unless they say `test`; tuning runs are in `reports/ranker_tuning.md`.
+
+**The ranker is trained in one snapshot and used in a later one.**
+
+| | Snapshot `train` | Snapshot `infer` |
+|---|---|---|
+| History the models and features see | `retrieval_train` | `retrieval_train` + `ranker_train` |
+| Period being predicted | `ranker_train` | `val`, then `test` |
+| Candidates from | `tt_id` (Phase 4) | `tt_id` refitted on both splits |
+| ALS score from | ALS fitted on `retrieval_train` | ALS fitted on both splits |
+| Label | 1 if the user first plays the candidate in `ranker_train` | none; only the evaluator has it |
+
+The same code builds both; only the history it is handed differs.
+Why: everything the ranker is given must come from before the period it predicts, in
+training as in use. A retrieval model that had already seen `ranker_train` would score
+the tracks a user played there highly because it was trained on them, and the ranker
+would learn to trust a signal it does not get on `val`.
+Rejected: training the ranker on candidates from the refitted model; splitting
+`ranker_train` rows at random.
+
+**Every opponent is refitted on both train splits, with its Phase 3 or 4 setting.**
+Why: the two-stage system sees `ranker_train`. Against models that stopped four weeks
+earlier, fresher data would be counted as the ranker's gain. The fresher data alone
+raises NDCG@10 by 3.8% for popularity, 5.3% for item-kNN, 8.6% for ALS and 8.9% for
+`tt_id` (0.0320 to 0.0349).
+The refitted `tt_id` stops on `val` Recall@100 as in Phase 4; it kept epoch 21 at 0.1510.
+Rejected: tuning the opponents again on the larger data, a second round of choices made
+on `val`.
+
+**Candidates are `tt_id`'s top 1,000 unplayed tracks per user. ALS is a feature, not a second source.**
+In the `train` snapshot the top 100, 200, 500 and 1,000 hold 15%, 22%, 36% and 49% of
+the tracks a user goes on to play for the first time. The ranker cannot recommend a track
+that is not a candidate, so these are its ceiling.
+Why `tt_id`: it and `tt_hybrid` are level, and it is the simpler one.
+Rejected: pooling candidates from several models, which would raise the ceiling but mix
+the ranker's gain with the wider pool's.
+
+**The label uses the evaluator's rule: 1 if the user plays the candidate in the period and had not played it before.**
+124,461 of 14.3 million candidate rows are positive (0.87%). A user with no positive
+among the candidates being reordered is left out of training, because a ranking loss
+compares a user's candidates with each other: 10,604 of 14,307 users remain at 500
+candidates.
+Rejected: labels graded by play count; adding the tracks a user played that retrieval
+missed, which the ranker never meets in use.
+
+**19 features in four groups, all computed from the snapshot's history.**
+
+| Group | Features |
+|---|---|
+| models | the candidate's rank and score from `tt_id`, and from ALS |
+| track | listeners overall, in the last 28 and the last 7 days; share of its listeners who played it in the last 28 days; share of those who were playing it for the first time |
+| user | tracks played; plays in the last 28 days; share of recently played tracks that were new; how popular their tracks are; days since last play |
+| pair | similarity to the user's last 28 days of listening in `tt_id` space; audio, lyrics and genre similarity to their history; the track's popularity minus the user's usual |
+
+Scores are standardised within each user's list, because scores from separately trained
+models are not on one scale. Counts enter as logs and shares, because the `infer`
+snapshot has four more weeks of history. A value that cannot be computed is missing, not 0.
+Rejected: raw counts; artist features, which wait on the Music4All metadata.
+
+**`track_age_days` was dropped after the drift check.**
+`candidates` prints each feature's mean in the two snapshots. Days since a track was
+first heard ran from 319 to 338 for 99% of `train` candidates and from 347 to 366 in
+`infer`: nearly every candidate dates from the start of the window, so the feature
+measured the window's length, and its two ranges do not overlap. A split learned on one
+would mean something else on the other. Every other feature's mean moves by under 5%,
+except `user_days_since_last` (15.4 to 17.0 days), which shifts only for users who had
+already stopped listening.
+
+**Candidates below the cut-off keep their retrieval order, and so do candidates the ranker scores the same.**
+The ranker reorders a user's first `n_candidates`; the rest follow, so every list still
+has 1,000 tracks and Recall@500 stays comparable. `rerank` hands the evaluator minus each
+track's place in the final list, not the model's raw score.
+Why: a model of a few shallow trees gives many candidates exactly the same score, and the
+evaluator orders equal scores by track ID, which is arbitrary. In a run with 1,000
+candidates and depth-1 trees the fix raised NDCG@10 from 0.0298 to 0.0357 at 25 trees;
+from 200 trees on it moved no result by more than 0.0001.
+
+**The number of trees is picked on `val` through the evaluator.**
+A model is trained to 600 trees and its lists at every 25 go through `evaluate.score`;
+the count with the best NDCG@10 is kept.
+Why: it is the rule the two-tower model uses for epochs, and it avoids carving a random
+validation set out of the training rows.
+The first run, at depth 6, scored every 50 trees and peaked at 50, the first count, so
+the step was halved. Deep trees peak early (25 to 50 trees at depth 8) and shallow ones
+later (150 to 300 at depth 1). No setting's best count is the last one.
+Caveat: as in Phase 4, the kept count is the best of several `val` readings.
+
+**Pairing method `mean`, fixed and not tuned, because `topk` is unstable here.**
+LambdaRank learns from pairs of a user's candidates with different labels. `topk`, the
+XGBoost default, uses only pairs that involve one of the user's current top 32; `mean`
+samples a pair for every candidate.
+A full tuning pass with `topk` came first. It picked 200 candidates and depth-1 trees at
+NDCG@10 = 0.0394, with a smooth curve. The ablation then retrained that setting without
+one feature group at a time:
+
+| Depth 1, 200 candidates | `topk` | `mean` |
+|---|---|---|
+| Without the pair features | 0.0342 at 25 trees, then 0.023 to 0.027 | 0.0359, rising smoothly |
+| Without the model scores | 0.0312 at 25 trees, then jumping between 0.019 and 0.031 | 0.0339, rising smoothly |
+| Only `tt_rank` and `tt_z` | 0.0348, then down to 0.0329 by 600 trees | not run |
+
+Retrieval order alone scores 0.0349, so a `topk` ranker given nothing but the retrieval
+rank ends up worse than not reordering at all.
+Likely reason, not verified: with about 1% of candidates positive, `topk` learns mostly
+from the few candidates on top at that moment, and pushing those down changes which ones
+are on top.
+Why `mean`: on the full feature set the two are level (0.0393 for `topk` against 0.0392
+at depth 1 and 500 candidates), and `mean` stays stable when features are removed.
+Not tried: `topk` with a cut-off as long as the list, which is one more setting to tune.
+
+**Tuned in stages on `val`, selecting on NDCG@10: 16 runs of one to four minutes.**
+Order: tree depth with learning rate, a lower learning rate, candidates reordered,
+objective. `tt_id` alone scores NDCG@10 = 0.0349.
+
+| Stage | Result (NDCG@10) |
+|---|---|
+| Tree depth 1, 2, 3, 4, 6, 8 at learning rate 0.1 | 0.0391, 0.0392, 0.0395, 0.0389, 0.0376, 0.0369 |
+| Learning rate 0.05, 0.1, 0.2 at depth 3 | 0.0392, 0.0395, 0.0388 |
+| Candidates reordered 200, 500, 1,000 | 0.0390, 0.0395, 0.0391 |
+| Objective LambdaRank, yes/no | 0.0395, 0.0396 |
+
+Chosen: 500 candidates, depth 3, learning rate 0.1, LambdaRank, 250 trees. Each of the
+three tuned values has a worse one on either side.
+Trees deeper than 4 do worse, and worse the longer they train. With 0.87% of rows
+positive, they fit the quirks of one 28-day period.
+Cost: settings in different stages are never varied together.
+Caveat: depths 1 to 4 are within 0.0006 of each other, and a single run moves by up to
+0.0003 between neighbouring tree counts. That deep trees lose is a finding; the choice
+among the shallow ones is not.
+
+**LambdaRank is kept, although a plain yes/no objective does as well.**
+At the chosen setting `binary:logistic` scores NDCG@10 = 0.0396 against 0.0395, so it wins
+under the selection rule by 0.0001. The ranking objective adds nothing measurable to
+NDCG@10 here.
+Why LambdaRank all the same: the margin is noise, it is ahead on Recall@10 (0.0340
+against 0.0335) and Recall@20 (0.0569 against 0.0557), and its top 10s reach more of the
+catalogue (33.7% against 29.9%), which matters for the Phase 6 popularity analysis.
+The yes/no model is the steadier of the two: its NDCG@10 stays between 0.0391 and 0.0396
+from 75 to 600 trees.
+
+**SHAP values come from XGBoost itself, not the `shap` package.**
+`predict(pred_contribs=True)` is exact TreeSHAP, and a test checks the contributions add
+up to the score.
+Why: the package brings in pandas, scikit-learn and numba for a result XGBoost already
+gives.
+
+**Differences between two models come with a 95% interval from a paired bootstrap over users.**
+`evaluate.difference` resamples users 2,000 times and takes the 2.5th and 97.5th
+percentiles of the mean difference. Paired, because both models are scored on the same
+users and most of the spread between users is shared.
+Why: Phase 4 ended with two models 0.001 apart and no way to say whether that was noise.
+
+**XGBoost is kept out of any process that loads PyTorch.**
+Loaded after PyTorch it crashes (two OpenMP runtimes, as with FAISS). `ranker.py` imports
+nothing that imports `torch` and reads other models' output from files:
+`data/processed/recs/` and `data/processed/ranker/`. Its tests are in `tests/isolated/`
+and run in a process of their own.
+XGBoost needs the OpenMP library `libomp`; here it finds the copy that comes with
+Anaconda's Python.
+
+**Leakage checks.**
+- A test builds the `train` snapshot with three different label periods and checks that
+  every feature is identical.
+- `candidates` refuses to build a snapshot unless the saved model's users and tracks are
+  those of the snapshot's history, so a model fitted on later data cannot be used by mistake.
+- A ranker trained on labels shuffled within each user scores NDCG@10 = 0.0089, against
+  0.0349 for retrieval order: with no real labels there is nothing for it to find.
+- The first real run gained 7.7% on NDCG@10 and the tuned model 13.2%, far from the
+  doubling that would have triggered an audit. The largest SHAP values belong to the
+  retrieval scores and to similarity with recent listening.
+
+**Finding: the ranker leans on the model scores first, then on what the user played recently.**
+The chosen setting retrained without one feature group at a time, on `val`. The full
+model scores NDCG@10 = 0.0395 and retrieval order 0.0349.
+
+| Without | NDCG@10 | Change | Share of SHAP in the full model |
+|---|---|---|---|
+| models | 0.0336 | -14.8% | 48% |
+| pair | 0.0360 | -8.8% | 31% |
+| track | 0.0381 | -3.4% | 17% |
+| user | 0.0388 | -1.8% | 3% |
+
+Without the model scores the ranker falls below retrieval order: the other features
+cannot rebuild what the retrieval model knows. Without the pair features about three
+quarters of the gain is gone. The largest single features are the `tt_id` score,
+`recent_affinity` (similarity to the last 28 days of listening) and
+`track_recent_share` (how much of a track's audience is recent).
+User features count for little. A user feature is the same for all of a user's
+candidates, so it can change an order only in combination with another feature.
+
+**`test` was scored once, after the owner confirmed the setting and LambdaRank on 2026-10-10.**
+`tune`, `ablate` and `val` read `val` only.
+Result on `test`, 10,280 users, every model fitted on both train splits:
+
+| Model | Recall@10 | NDCG@10 | Recall@100 | Recall@500 | Coverage@10 |
+|---|---|---|---|---|---|
+| Popularity | 0.0042 | 0.0061 | 0.0292 | 0.0950 | 0.1% |
+| Item-kNN | 0.0208 | 0.0276 | 0.1088 | 0.2841 | 19.7% |
+| ALS | 0.0244 | 0.0284 | 0.1356 | 0.3434 | 22.1% |
+| `tt_id` | 0.0278 | 0.0325 | 0.1468 | 0.3579 | 28.7% |
+| `tt_id` + ranker | 0.0310 | 0.0348 | 0.1508 | 0.3579 | 33.5% |
+
+The ranker against `tt_id` alone, with 95% intervals:
+
+| Metric | Difference | Interval | Relative |
+|---|---|---|---|
+| NDCG@10 | +0.0023 | +0.0010 to +0.0035 | +7.0% |
+| Recall@10 | +0.0032 | +0.0016 to +0.0046 | +11.3% |
+| Recall@100 | +0.0040 | +0.0015 to +0.0066 | +2.7% |
+
+Every interval is clear of zero. The gain in NDCG@10 is about half of the 13.2% on `val`,
+as expected when the setting and the tree count are picked on `val`.
+Recall@500 is unchanged by construction: the ranker reorders the first 500.
+Against ALS the two-stage system is 22% ahead on NDCG@10 and 27% on Recall@10.
+Fresher data alone is worth 5 to 7% on NDCG@10 on `test` for item-kNN, ALS and `tt_id`.
+For Phase 6: the trained ranker and its feature list are in
+`data/processed/models/ranker/`. The Music4All metadata arrived on 2026-10-10, so artist
+features can now be tried.
