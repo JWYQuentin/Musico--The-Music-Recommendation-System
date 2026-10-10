@@ -4,8 +4,10 @@ Every model hands in `n_recs` tracks per user, none of which the user played in 
 
   tune    every grid setting, scored on val. Writes reports/baselines_tuning.md.
   report  the chosen settings, scored on val and test. Writes reports/baselines.md and .json.
+  refit   the chosen settings fitted on both train splits, for Phase 5. Saves each model's
+          recommendations under data/processed/recs/ and scores nothing.
 
-Usage: python -m m4a_rec.baselines tune | report
+Usage: python -m m4a_rec.baselines tune | report | refit
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ from implicit.nearest_neighbours import CosineRecommender
 from implicit.utils import ParameterWarning
 
 from .config import load_config
-from .evaluate import score
+from .evaluate import TRAIN, score
 from .interactions import Interactions, build, load_train, to_frame
 from .reporting import grid_points, metric_tables, stable_json, table
 
@@ -71,16 +73,9 @@ def item_knn(inter: Interactions, n: int, k: int) -> pl.DataFrame:
     return to_frame(inter, idx, scores)
 
 
-def als(
-    inter: Interactions,
-    n: int,
-    factors: int,
-    regularization: float,
-    alpha: float,
-    iterations: int,
-    seed: int,
-) -> pl.DataFrame:
-    """Implicit-feedback matrix factorisation; a cell's confidence is alpha times its value."""
+def _fit_als(
+    inter: Interactions, factors: int, regularization: float, alpha: float, iterations: int, seed: int
+) -> AlternatingLeastSquares:
     model = AlternatingLeastSquares(
         factors=factors,
         regularization=regularization,
@@ -89,8 +84,20 @@ def als(
         random_state=seed,
     )
     model.fit(inter.matrix, show_progress=False)
+    return model
+
+
+def als(inter: Interactions, n: int, **settings) -> pl.DataFrame:
+    """Implicit-feedback matrix factorisation; a cell's confidence is alpha times its value."""
+    model = _fit_als(inter, **settings)
     idx, scores = model.recommend(np.arange(inter.matrix.shape[0]), inter.matrix, N=n)
     return to_frame(inter, idx, scores)
+
+
+def als_vectors(inter: Interactions, **settings) -> tuple[np.ndarray, np.ndarray]:
+    """The fitted ALS user and track vectors. A user's score for a track is their dot product."""
+    model = _fit_als(inter, **settings)
+    return model.user_factors, model.item_factors
 
 
 def fit_recommend(name: str, events: pl.DataFrame, cfg: dict, params: dict) -> pl.DataFrame:
@@ -143,13 +150,20 @@ def render_report(results: dict, train_splits: list[str], ks: list[int]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) != 1 or argv[0] not in {"tune", "report"}:
+    if len(argv) != 1 or argv[0] not in {"tune", "report", "refit"}:
         print(__doc__)
         return 2
     cfg = load_config()
     b, ks, reports = cfg["baselines"], cfg["metrics"]["ks"], cfg["paths"]["reports"]
-    events = load_train(cfg["paths"]["processed"] / "splits", b["train_splits"])
-    if argv[0] == "tune":
+    processed = cfg["paths"]["processed"]
+    events = load_train(processed / "splits", TRAIN if argv[0] == "refit" else b["train_splits"])
+    if argv[0] == "refit":
+        (processed / "recs").mkdir(exist_ok=True)
+        for name in MODELS:
+            recs = fit_recommend(name, events, b, b[name]["chosen"])
+            recs.write_parquet(processed / "recs" / f"{name}.parquet", compression="zstd")
+            print(f"wrote {processed / 'recs' / f'{name}.parquet'}", flush=True)
+    elif argv[0] == "tune":
         rows = []
         for name in MODELS:
             for params in grid_points(b[name]["grid"]):

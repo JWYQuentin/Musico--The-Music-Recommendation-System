@@ -1,0 +1,36 @@
+# Phase 5 ranker settings. Every number here is a decision; log changes in reports/decisions.md.
+
+ranker:
+  # The two moments the ranker lives in. Everything a snapshot uses comes from its `history`:
+  # the listens, the retrieval model (a directory under data/processed/models) and the ALS fit.
+  snapshots:
+    train: {history: [retrieval_train], retrieval_model: tt_id, labels: ranker_train}
+    infer: {history: [retrieval_train, ranker_train], retrieval_model: tt_id_refit}
+
+  n_recs: 1000        # candidates per user from the retrieval model, and the length of the final list
+  recent_days: 28     # "recent" in the features: the last four weeks of the history
+  short_days: 7       # "this week" in the features
+  select_on: ndcg@10  # the val metric that picks the number of trees and the chosen setting
+  seed: 42
+  max_rounds: 600     # trees trained per run
+  check_every: 25     # the list is scored on val at every multiple of this many trees
+  shap_rows: 200000   # candidate rows sampled for the SHAP summary
+
+  # Passed to XGBoost in every run.
+  fixed: {tree_method: hist, subsample: 0.8, colsample_bytree: 0.8, min_child_weight: 10}
+
+  # `report` trains this: the best LambdaRank setting of the stages below on val. The
+  # stages were run starting from max_depth 6 with the other values as here.
+  chosen:
+    n_candidates: 500              # how many of a user's candidates the ranker reorders; the rest keep retrieval order
+    max_depth: 3
+    eta: 0.1                       # learning rate
+    lambdarank_pair_method: mean   # which pairs the ranking loss compares; not tuned, topk is unstable here (see decisions.md)
+    objective: "rank:ndcg"         # LambdaRank; binary:logistic is the plain yes/no alternative
+
+  # Tuned on val in stages. Each stage tries its combinations on top of the best setting so far.
+  stages:
+    - {max_depth: [1, 2, 3, 4, 6, 8], eta: [0.1, 0.2]}
+    - {eta: [0.05, 0.1]}             # 0.1 beat 0.2 at every depth, so one step lower at the best depth
+    - {n_candidates: [200, 500, 1000]}
+    - {objective: ["rank:ndcg", "binary:logistic"]}

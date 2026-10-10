@@ -13,6 +13,7 @@ dependencies = [
     "implicit>=0.7.3",
     "torch>=2.4",
     "faiss-cpu>=1.9",
+    "xgboost>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -27,3 +28,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+norecursedirs = ["isolated"]  # run in their own process by tests/test_ranker.py

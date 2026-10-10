@@ -30,10 +30,14 @@ def relevant(history: pl.DataFrame, holdout: pl.DataFrame) -> pl.DataFrame:
     return holdout.select(PAIR).unique().join(history.select(PAIR).unique(), on=PAIR, how="anti")
 
 
-def metrics(
-    recs: pl.DataFrame, relevant: pl.DataFrame, seen: pl.DataFrame, ks: list[int], n_catalog: int
-) -> dict:
-    """Recall@K, NDCG@K, coverage@K and short-list share, over users with a relevant track."""
+def per_user(
+    recs: pl.DataFrame, relevant: pl.DataFrame, seen: pl.DataFrame, ks: list[int]
+) -> tuple[pl.DataFrame, pl.DataFrame]:
+    """Each user's own recall@K, ndcg@K and list length n@K, and the ranked lists behind them.
+
+    The first frame has one row per user with a relevant track, sorted by user_id. A user
+    with no recommendations scores 0.
+    """
     n_rel = relevant.group_by("user_id").len(name="n_rel")
     ranked = (
         recs.join(n_rel, on="user_id", how="semi")
@@ -47,20 +51,51 @@ def metrics(
     )
     # ideal[m - 1] is the DCG of m hits in the top m places
     ideal = np.cumsum(1 / np.log2(np.arange(2, max(ks) + 2)))
-    out = {"users": n_rel.height}
+    users = n_rel.sort("user_id")
     for k in ks:
-        top = ranked.filter(pl.col("rank") <= k)
-        per_user = top.group_by("user_id").agg(
+        top = ranked.filter(pl.col("rank") <= k).group_by("user_id").agg(
             hits=pl.col("hit").sum(),
             dcg=(pl.col("hit") / (pl.col("rank") + 1).log(2)).sum(),
             n=pl.len(),
         )
-        u = n_rel.join(per_user, on="user_id", how="left").fill_null(0)  # no recs scores 0
+        u = users.select("user_id", "n_rel").join(top, on="user_id", how="left", maintain_order="left").fill_null(0)
         nrel = u["n_rel"].to_numpy()
-        out[f"recall@{k}"] = float((u["hits"].to_numpy() / nrel).mean())
-        out[f"ndcg@{k}"] = float((u["dcg"].to_numpy() / ideal[np.minimum(k, nrel) - 1]).mean())
-        out[f"coverage@{k}"] = top["track_id"].n_unique() / n_catalog
-        out[f"short@{k}"] = float((u["n"].to_numpy() < k).mean())
+        users = users.with_columns(
+            pl.Series(f"recall@{k}", u["hits"].to_numpy() / nrel),
+            pl.Series(f"ndcg@{k}", u["dcg"].to_numpy() / ideal[np.minimum(k, nrel) - 1]),
+            pl.Series(f"n@{k}", u["n"].to_numpy()),
+        )
+    return users, ranked
+
+
+def metrics(
+    recs: pl.DataFrame, relevant: pl.DataFrame, seen: pl.DataFrame, ks: list[int], n_catalog: int
+) -> dict:
+    """Recall@K, NDCG@K, coverage@K and short-list share, over users with a relevant track."""
+    users, ranked = per_user(recs, relevant, seen, ks)
+    out = {"users": users.height}
+    for k in ks:
+        out[f"recall@{k}"] = float(users[f"recall@{k}"].to_numpy().mean())
+        out[f"ndcg@{k}"] = float(users[f"ndcg@{k}"].to_numpy().mean())
+        out[f"coverage@{k}"] = ranked.filter(pl.col("rank") <= k)["track_id"].n_unique() / n_catalog
+        out[f"short@{k}"] = float((users[f"n@{k}"].to_numpy() < k).mean())
+    return out
+
+
+def paired_difference(a: pl.DataFrame, b: pl.DataFrame, columns: list[str], n_boot: int, seed: int) -> dict:
+    """Mean of a minus b over users for each column, with a 95% interval from resampling users.
+
+    `a` and `b` are per-user frames for the same users. Each resample draws users with
+    replacement and keeps both models' values for a drawn user together.
+    """
+    both = a.join(b, on="user_id", suffix="_b")
+    rng = np.random.default_rng(seed)
+    draws = rng.integers(0, both.height, size=(n_boot, both.height))
+    out = {}
+    for column in columns:
+        diff = (both[column] - both[f"{column}_b"]).to_numpy()
+        low, high = np.quantile(diff[draws].mean(axis=1), [0.025, 0.975])
+        out[column] = {"diff": float(diff.mean()), "low": float(low), "high": float(high)}
     return out
 
 
@@ -85,6 +120,17 @@ def score(recs: pl.DataFrame, split: str, only_tracks: list[str] | None = None) 
     if only_tracks is not None:
         recs, rel, n_catalog = only(recs, rel, only_tracks)
     return metrics(recs, rel, seen, cfg["metrics"]["ks"], n_catalog)
+
+
+def difference(recs_a: pl.DataFrame, recs_b: pl.DataFrame, split: str) -> dict:
+    """recs_a minus recs_b on val or test, per recall@K and ndcg@K, with a 95% interval each."""
+    cfg = load_config()
+    rel, seen, _ = truth(cfg["paths"]["processed"] / "splits", split)
+    ks, boot = cfg["metrics"]["ks"], cfg["bootstrap"]
+    a, _ = per_user(recs_a, rel, seen, ks)
+    b, _ = per_user(recs_b, rel, seen, ks)
+    columns = [f"{metric}@{k}" for metric in ("recall", "ndcg") for k in ks]
+    return paired_difference(a, b, columns, boot["n"], boot["seed"])
 
 
 def main() -> int:

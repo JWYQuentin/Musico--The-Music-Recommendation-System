@@ -22,8 +22,14 @@ small live demo. The owner is learning PyTorch through this project.
   ALS (test Recall@100 = 0.139 against 0.130) and are level with each other; `tt_content`
   handles tracks with no listens. Their vectors are saved under `data/processed/models/`
   for Phase 5.
-- Phases 5-6: not started. See README.md for the plan.
-- `pyproject.toml` lists only what Phases 1-4 use. Add a phase's libraries there when the
+- Phase 5 (XGBoost ranker on `tt_id` candidates): done, 2026-10-10. Results are in
+  `reports/ranker.md`. Reordering `tt_id`'s top 500 lifts test NDCG@10 from 0.0325 to
+  0.0348 (95% interval on the gain +0.0010 to +0.0035) and Recall@10 from 0.0278 to
+  0.0310. In this comparison every model is refitted on both train splits, so these
+  numbers are not the Phase 3 and 4 ones. The trained ranker is saved under
+  `data/processed/models/ranker/` for Phase 6.
+- Phase 6: not started. See README.md for the plan.
+- `pyproject.toml` lists only what Phases 1-5 use. Add a phase's libraries there when the
   phase starts.
 
 ## Data
@@ -41,11 +47,15 @@ Music4All-Onion, Zenodo record 6609677, CC BY 4.0. Listening events come from La
 | `data/processed/splits/{retrieval_train,ranker_train,val,test}.parquet` | the subsample cut by time; same columns |
 | `data/processed/events.meta.json`, `data/processed/splits/splits.meta.json` | written beside the data: window and split boundaries, user and listen counts |
 | `data/processed/features.npz` | standardised audio, lyrics and genre features for every training track, with `track_ids` |
-| `data/processed/models/<model>/` | a trained two-tower model's `user_vecs.npy`, `track_vecs.npy`, the IDs their rows belong to, and `tracks.faiss` |
+| `data/processed/models/<model>/` | a trained two-tower model's `user_vecs.npy`, `track_vecs.npy`, the IDs their rows belong to, and `tracks.faiss`. `tt_id` is fitted on `retrieval_train`, `tt_id_refit` on both train splits |
+| `data/processed/recs/<model>.parquet` | the top 1,000 tracks per user from popularity, item-kNN, ALS and `tt_id`, each fitted on both train splits |
+| `data/processed/ranker/{train,infer}.parquet` | the ranker's two snapshots: one row per (user, candidate) with every feature; `train` also has `label` |
+| `data/processed/models/ranker/` | the trained ranker (`model.json`) and its feature list and tree count (`meta.json`) |
 
 - There are no likes, skips, or play durations. A row means "user played track at time".
 - Track titles, artists, and genre names are NOT in Onion. They come from the base
-  Music4All dataset, requested by email on 2026-10-04. Until it arrives, work on track IDs.
+  Music4All dataset, which arrived on 2026-10-10 as `data/raw/music4all.zip` (48 GB). It
+  has not been unpacked or checked yet; nothing up to Phase 5 uses it.
 - The events file has a header row and `YYYY-MM-DD HH:MM:SS` timestamps (checked against
   the real file on 2026-10-04). `prepare.sniff` detects both at runtime; if `convert`
   fails, look at the first lines of the file before changing code.
@@ -63,6 +73,8 @@ Music4All-Onion, Zenodo record 6609677, CC BY 4.0. Listening events come from La
   fewer than K tracks after the filter; if it is not near 0, the model handed in too few.
 - `score(recs, split, only_tracks=[...])` scores as if those were the only tracks in the
   catalogue. The cold-start test uses it.
+- `evaluate.difference(recs_a, recs_b, split)` gives the gap between two models with a 95%
+  interval, from resampling users (`bootstrap` in `configs/eval.yaml`).
 - For `test`, "already played" includes `val` plays, which no model has seen. Averages
   run over users with at least one relevant track; a user with no recommendations scores
   0. Coverage is measured against the tracks in the two train splits.
@@ -85,6 +97,13 @@ python -m m4a_rec.retrieval report    # tt_id and tt_hybrid on val and test, ~30
 python -m m4a_rec.coldstart val       # cold-start test on val only, prints, ~10 min
 python -m m4a_rec.coldstart report    # the same on val and test; writes reports/coldstart.md
 python -m m4a_rec.index data/processed/models/tt_id   # builds and checks the FAISS index
+python -m m4a_rec.baselines refit    # the three baselines on both train splits, ~3 min; writes data/processed/recs/
+python -m m4a_rec.retrieval refit    # tt_id on both train splits, ~25 min; writes models/tt_id_refit/ and recs/tt_id.parquet
+python -m m4a_rec.candidates         # both ranker snapshots, ~7 min; prints each feature's mean in the two
+python -m m4a_rec.ranker tune        # the tuning stages on val; resumes from reports/ranker_tuning.json
+python -m m4a_rec.ranker ablate      # the chosen setting without each feature group, on val
+python -m m4a_rec.ranker val         # every model on val; prints, writes nothing
+python -m m4a_rec.ranker report      # val and test, intervals, SHAP; writes reports/ranker.md
 pytest -q
 pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 ```
@@ -113,12 +132,20 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
   supplies the content matrix in the same track order as `interactions.build`.
   `coldstart.py` reuses `fit` with some tracks left out. `reporting.py` has the table
   and JSON helpers every report uses.
+- The ranker works from two snapshots, defined in `configs/ranker.yaml`. `train`: history
+  is `retrieval_train`, candidates and the ALS score come from models fitted on it alone,
+  and the label is whether the user first plays the candidate in `ranker_train`. `infer`:
+  history is both train splits, the models are the refitted ones, and there is no label.
+  `rank_features.py` turns a history and a candidate list into features and knows nothing
+  about files or splits; `candidates.py` builds both snapshots with it; `ranker.py` trains
+  on `train`, reorders `infer` and hands the lists to `evaluate.score`. A new feature goes
+  in `rank_features.GROUPS` and must be computed from the history argument only.
 - Every module is pure functions plus a thin `main()`. The functions take frames, paths
   and plain arguments; only `main()` calls `load_config()` and touches `data/`. Tests call
   the functions on synthetic data built in `tests/conftest.py` and never read `data/`.
   New modules follow the same shape so they can be tested the same way.
 - `load_config()` merges every file under `configs/` (`data.yaml`, `eval.yaml`,
-  `baselines.yaml`, `twotower.yaml`) into one dict, so
+  `baselines.yaml`, `twotower.yaml`, `ranker.yaml`) into one dict, so
   top-level keys must not collide across config files. It turns `paths` into absolute
   `Path`s and creates those directories. A new config file has to be added to it.
 - Time ranges are half-open `(start, end]` everywhere: an event exactly on a boundary
@@ -145,6 +172,13 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 - FAISS and PyTorch abort the process if both are loaded (two OpenMP runtimes on macOS).
   `src/m4a_rec/index.py` is the only module that imports `faiss`; it must not import
   `torch` or any module that does, and its tests run it in a subprocess.
+- XGBoost crashes the process if it is loaded after PyTorch, for the same reason.
+  `src/m4a_rec/ranker.py` is the only module that imports `xgboost`; it must not import
+  `torch` or any module that does (`retrieval`, `twotower`, `coldstart`, `candidates`), so
+  it reads other models' output from files. Its tests are in `tests/isolated/`, which
+  `pytest` skips and `tests/test_ranker.py` runs in a process of its own.
+- XGBoost needs the OpenMP library `libomp`. Here it finds Anaconda's copy, because the
+  venv is built on Anaconda's Python; elsewhere it needs `brew install libomp`.
 - Use Polars, not pandas. Keep raw data out of git.
 - The owner writes the two-tower forward pass and loss by hand in Phase 4. Review that
   code and explain problems; do not rewrite it unasked.

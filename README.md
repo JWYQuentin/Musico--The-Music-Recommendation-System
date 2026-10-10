@@ -1,14 +1,14 @@
 # Two-stage music recommender on Music4All-Onion
 
 A retrieval-then-ranking recommender: a two-tower neural network picks candidate tracks,
-and a gradient-boosted model ranks them. Work in progress; Phases 1 to 4 of 6 are done.
+and a gradient-boosted model ranks them. Work in progress; Phases 1 to 5 of 6 are done.
 
 ## Phase 1: get the data and audit it
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q                             # 81 tests, a few seconds
+pytest -q                             # 94 tests, a few seconds
 
 python -m m4a_rec.download            # about 3 GB from Zenodo
 python -m m4a_rec.prepare convert     # slow: decompresses 2.2 GB of bz2
@@ -131,6 +131,64 @@ training it adds about 41% over comparing raw features directly.
 Full tables are in `reports/retrieval.md` and `reports/coldstart.md`, the tuning runs in
 `reports/twotower_tuning.md`.
 
+## Phase 5: ranker
+
+```bash
+python -m m4a_rec.baselines refit     # the three baselines on both train splits, about 3 minutes
+python -m m4a_rec.retrieval refit     # tt_id on both train splits, about 25 minutes
+python -m m4a_rec.candidates          # the ranker's two snapshots, about 7 minutes
+python -m m4a_rec.ranker tune         # tuning on val, about 40 minutes
+python -m m4a_rec.ranker ablate       # the chosen setting without each feature group, on val
+python -m m4a_rec.ranker report       # every model on val and test, about 4 minutes
+```
+
+The second stage: an XGBoost model (LambdaRank) that takes each user's top 500 candidates
+from `tt_id` and reorders them. It sees 19 features the retrieval model does not combine:
+the candidate's score from `tt_id` and from ALS, how the track is trending, how the user
+listens, and how close the candidate is to what the user played in the last four weeks.
+
+It is trained in one moment and used in a later one, and in both it sees only the past:
+
+| | Training | Use |
+|---|---|---|
+| History | `retrieval_train` | `retrieval_train` + `ranker_train` |
+| Candidates and scores from | models fitted on that history | the same models refitted on that history |
+| Label | did the user first play the candidate in `ranker_train`? | none; `val` and `test` are the evaluator's |
+
+Results on `test`, 10,280 users. Every model is refitted on both train splits, so the
+last two rows differ only in the ranker:
+
+| Model | Recall@10 | NDCG@10 | Recall@100 | Coverage@10 |
+|---|---|---|---|---|
+| Popularity | 0.0042 | 0.0061 | 0.0292 | 0.1% |
+| Item-kNN | 0.0208 | 0.0276 | 0.1088 | 19.7% |
+| ALS | 0.0244 | 0.0284 | 0.1356 | 22.1% |
+| `tt_id` | 0.0278 | 0.0325 | 0.1468 | 28.7% |
+| `tt_id` + ranker | 0.0310 | 0.0348 | 0.1508 | 33.5% |
+
+The ranker adds 7% to NDCG@10 and 11% to Recall@10 over `tt_id` alone. With a 95%
+interval from resampling users, the gain in NDCG@10 is 0.0010 to 0.0035 and in Recall@10
+0.0016 to 0.0046, so both are clear of zero. Against ALS the two-stage system is 22%
+ahead on NDCG@10. It also spreads its top 10s over more of the catalogue.
+
+What it uses, by SHAP value: the two models' scores (48%), the match between user and
+track (31%, half of it similarity to recent listening), track trends (17%) and user features
+(3%). Retrained without the model scores it falls below plain retrieval order.
+
+![What the ranker uses](reports/figures/ranker_shap.png)
+
+Three things the tuning showed:
+
+- Shallow trees win. Depth 3 is best and depths above 4 are clearly worse: with under 1%
+  of candidates positive, deep trees fit one month's quirks.
+- A plain yes/no objective does as well as LambdaRank on NDCG@10. LambdaRank is kept
+  because its lists cover more of the catalogue.
+- XGBoost's default way of pairing candidates (`topk`) is unstable on this data; the
+  `mean` method scores the same and is not.
+
+Full tables are in `reports/ranker.md`, the tuning runs in `reports/ranker_tuning.md`.
+XGBoost needs the OpenMP library: on macOS, `brew install libomp` if it is not found.
+
 ## Layout
 
 ```
@@ -138,12 +196,14 @@ configs/data.yaml      every Phase 1 setting
 configs/eval.yaml      split lengths and K values
 configs/baselines.yaml baseline grids and chosen settings
 configs/twotower.yaml  two-tower settings, tuning stages, cold-start hold-out
+configs/ranker.yaml    ranker snapshots, feature windows, tuning stages, chosen setting
 src/m4a_rec/           download.py, prepare.py, audit.py, split.py, evaluate.py,
                        interactions.py, baselines.py, features.py, twotower.py,
-                       retrieval.py, coldstart.py, index.py, reporting.py
+                       retrieval.py, coldstart.py, index.py, rank_features.py,
+                       candidates.py, ranker.py, reporting.py
 tests/                 run on synthetic data in the real file layout
 reports/               decisions.md, and generated reports for the audit, baselines,
-                       retrieval and cold start
+                       retrieval, cold start and the ranker
 CLAUDE.md              project brief and rules for Claude Code
 ```
 
