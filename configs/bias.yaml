@@ -1,0 +1,23 @@
+# Phase 6 bias and fairness settings. Every number here is a decision; log changes in reports/decisions.md.
+
+bias:
+  k: 10   # measured on the list a user sees
+
+  # Tracks are ranked from most to fewest listeners in training and cut so that each group
+  # holds the same share of all training (user, track) pairs.
+  popularity_groups: [head, middle, tail]
+
+  # Users in equal-sized groups by how popular the tracks in their training history are.
+  listener_groups: [niche, middle, mainstream]
+
+  # A user's genre is the group with most of their training plays. Genres with fewer
+  # users than this are pooled into one row, because their intervals are too wide to read.
+  min_genre_users: 200
+
+  # The fix: when the final ranker reorders a user's candidates, a candidate's score
+  # becomes its ranker score minus `lambda` times its popularity (log listeners), both
+  # standardised within the user's list.
+  penalty:
+    lambdas: [0.0, 0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1.0]   # swept on val
+    max_ndcg_loss: 0.02   # the rule: the largest lambda that costs under this share of NDCG@K on val
+    chosen: 0.1           # what the rule picks on val (reports/bias_tuning.md); null leaves the penalised row out

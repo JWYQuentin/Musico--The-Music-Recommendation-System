@@ -1,0 +1,32 @@
+# Phase 6 metadata settings. Every choice here is a decision; log changes in reports/decisions.md.
+
+metadata:
+  dir: music4all   # the unpacked base Music4All dataset, under data/raw/
+
+  # Only fixed facts about a track are read. The dataset's Spotify popularity score, its
+  # Last.fm tags and its own file of listens were collected after the training period ends.
+  files:
+    information: id_information.csv   # id, artist, song, album_name
+    genres: id_genres.csv             # id, genres: comma-separated
+    lang: id_lang.csv                 # id, lang
+    metadata: id_metadata.csv         # only the `release` year is read
+
+  # One broad group per track. The track's first-listed genre label decides: the first
+  # group below with a word found in that label wins, and a label matching none is "other".
+  # Order matters: "pop punk" is punk and "alternative metal" is metal because those
+  # groups come before pop and rock.
+  genre_groups:
+    - {name: metal, words: [metal, grindcore, deathcore, djent]}
+    - {name: hip hop, words: [hip hop, hip-hop, rap, grime]}
+    - {name: punk and hardcore, words: [punk, core, emo, ska]}
+    - name: electronic
+      words: [electro, tronica, house, techno, trance, dubstep, ambient, edm, drum and bass, idm,
+              downtempo, trip hop, synth, dance, chillwave, industrial, vaporwave, ebm]
+    - {name: folk and country, words: [folk, country, singer-songwriter, americana, bluegrass, acoustic]}
+    - {name: "soul, r&b and funk", words: [soul, "r&b", rnb, funk, motown, disco]}
+    - {name: jazz and blues, words: [jazz, blues, swing, bossa]}
+    - {name: classical and soundtrack, words: [classical, soundtrack, score, opera, piano, orchestra]}
+    - name: latin, reggae and world
+      words: [latin, reggae, mpb, samba, sertanejo, forro, world, afro, brazil, pagode, dub]
+    - {name: rock, words: [rock, grunge, shoegaze, psychedelic, new wave, britpop, post-]}
+    - {name: pop, words: [pop]}

@@ -8,7 +8,8 @@ from m4a_rec.evaluate import PAIR, truth
 # Modules allowed to name the full event files or the held-out splits. Model code must
 # read the two train splits only and get its scores from evaluate.score.
 MAY_READ_EVERYTHING = {"prepare.py", "audit.py", "split.py", "evaluate.py"}
-FORBIDDEN = ["events.parquet", "events_full", "val.parquet", "test.parquet"]
+# The last name is the base Music4All dataset's own file of listens, which covers val and test.
+FORBIDDEN = ["events.parquet", "events_full", "val.parquet", "test.parquet", "listening_history"]
 
 
 def test_only_listed_modules_name_heldout_files():

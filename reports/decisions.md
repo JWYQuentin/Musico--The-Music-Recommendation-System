@@ -589,3 +589,225 @@ Fresher data alone is worth 5 to 7% on NDCG@10 on `test` for item-kNN, ALS and `
 For Phase 6: the trained ranker and its feature list are in
 `data/processed/models/ranker/`. The Music4All metadata arrived on 2026-10-10, so artist
 features can now be tried.
+
+## Phase 6: artist features, bias and fairness, demo (2026-10-10)
+
+Numbers are on `val` unless they say `test`.
+
+**The base Music4All dataset is used under the confidentiality agreement the owner signed.**
+Its terms: research use only, not to be shared, and the dataset's paper cited wherever
+results are published.
+What that means here:
+- Nothing read from it is in the repository: no titles, artists, albums or lyrics in
+  reports, tests, configs or the README. Reports show aggregates.
+- `tracks.parquet` and the demo page are written under `data/`, which git ignores. The
+  demo is opened from disk and is not hosted anywhere.
+- The README and the demo page carry the full citation.
+Rejected: a public demo, which would publish titles and artists for thousands of tracks.
+
+**Only fixed facts about a track are read from Music4All: title, artist, album, year, language, genre labels.**
+Not read: its Spotify popularity score, its Last.fm tags and its own file of listens.
+Why: all three were collected after the training period ends, so they know the future.
+`tests/test_leakage.py` now also fails if a module names that file of listens.
+
+**One broad genre group per track: its first-listed label, mapped by keyword rules.**
+The training tracks carry 507 different first-listed labels. Rules in
+`configs/metadata.yaml` map them to 11 groups; the first group with a word found in the
+label wins, so "pop punk" is punk and "alternative metal" is metal. 3.4% of plays fall in
+"other".
+Why one group: shares of slots and of listening only add up if each track counts once.
+Cost: the rules make some calls a listener would dispute. "Blues rock" goes to jazz and
+blues, and "synthpop" to electronic.
+Rejected: counting a track under every label it lists; mapping the labels by hand.
+
+**Six artist features for the ranker, in a fifth group.**
+`artist_tracks`, `artist_play_share`, `artist_days_since`, `artist_catalog_share`,
+`album_tracks` and `artist_listeners`: what the user has played by the candidate's artist
+and from its album, and how many users play that artist. An album is an artist and an
+album name together.
+Why: among a user's top 500 candidates, 41% are by an artist the user has already played,
+and those are right 2.3 times as often (1.86% against 0.80%). 61% of the tracks users go
+on to play for the first time are by an artist they already knew.
+They follow the Phase 5 rule: computed from the snapshot's history and a fixed
+track-to-artist table. The two leakage tests cover them without change.
+Check after rebuilding the snapshots: rows, labels and the 19 earlier features are
+identical to Phase 5's, and no new feature's mean moves by more than 8% between the two
+snapshots.
+Not done: adding a user's artists' unplayed tracks as candidates. The ranker still only
+reorders what `tt_id` retrieved.
+
+**The Phase 5 ranker is kept as a named model beside the new one.**
+`ranker` uses the four Phase 5 groups, `ranker_artist` adds the artist group. Each has
+its own setting, tuning file and saved model, and the report shows both.
+Why: the difference between the two rows is what the artist features add.
+Fitted through the new code, `ranker` reproduces Phase 5 exactly: 250 trees and
+NDCG@10 = 0.0395, with the same value at every tree count.
+
+**`ranker fit` saves a model and its lists; `report` only scores what was saved.**
+Why: the bias measures and the penalty are worked out on `val` from the final lists, so
+those lists have to exist before `test` is scored.
+
+**The bias analysis gets held-out information from the evaluator, never the files.**
+`evaluate.breakdown` returns each user's top K without labels, each user's own scores,
+and totals per group of tracks. `evaluate.hits` returns which shown tracks a user went on
+to play, for the demo's marks only.
+Why: the rule that only `evaluate.py` reads `val` and `test` should hold for analysis
+code as well as for models.
+
+**Popularity groups hold equal shares of listening, not equal numbers of tracks.**
+Tracks are ranked by listeners in training and cut into head, middle and tail so that
+each holds a third of all (user, track) pairs.
+Why: a model that spread its slots the way people listen would give each group a third.
+With equal numbers of tracks, almost all listening would sit in the first group.
+
+**Listeners are grouped by how popular their history is; fans by their most-played genre.**
+Three equal groups by the average popularity percentile of a user's tracks: niche,
+middle, mainstream. A user's genre is the group with most of their plays; genres with
+under 200 users are pooled, because their intervals are too wide to read.
+
+**The SHAP chart uses one colour, with the group written in each label.**
+Why: its bars are ranked by value, so any two groups can sit side by side, and five
+categorical colours cannot all be told apart in that arrangement. The Phase 5 version
+used four and had the same weakness.
+
+**The demo is one self-contained HTML file built from saved results.**
+200 listeners drawn at random from those `test` is scored on. For each: recent
+listening, the final model's top 10 with its three largest positive SHAP values put into
+words, how far the ranker moved each track, a mark where the listener went on to play
+it, and every model's top 10 side by side. For any track: its 10 nearest tracks from the
+FAISS index over the refitted `tt_id` vectors.
+Why static: no server, no new libraries, works offline, and nothing leaves the laptop.
+All data reaches the page as text, never as markup; a test checks the template.
+Rejected: a Streamlit app, which adds pandas and cannot be shared without the data.
+
+**`ranker_artist` is tuned on `val` with the Phase 5 stages: 16 runs.**
+`tt_id` alone scores NDCG@10 = 0.0349 and the Phase 5 `ranker` 0.0395.
+
+| Stage | Result (NDCG@10) |
+|---|---|
+| Tree depth 1, 2, 3, 4, 6, 8 at learning rate 0.1 | 0.0441, 0.0447, 0.0445, 0.0442, 0.0428, 0.0399 |
+| Learning rate 0.05, 0.1, 0.2 at depth 2 | 0.0449, 0.0447, 0.0444 |
+| Candidates reordered 200, 500, 1,000 | 0.0436, 0.0449, 0.0446 |
+| Objective LambdaRank, yes/no | 0.0449, 0.0450 |
+
+Chosen: 500 candidates, depth 2, learning rate 0.05, `mean` pairing, LambdaRank, 600 trees.
+As in Phase 5, shallow trees win and the yes/no objective is level with LambdaRank, which
+is kept for the same reason: wider coverage (39.1% of the catalogue in top 10s against
+33.8%).
+Caveat: at learning rate 0.05 the best count is the last one checked, and NDCG@10 was
+still rising by about 0.0001 every 25 trees. Learning rate 0.1 peaks inside the range
+(0.0447 at 350 trees). The two are within the noise; the selection rule picks 0.05, so
+that is the setting, and the limit of 600 trees was left alone to keep one protocol for
+both rankers.
+
+**Finding: the artist features are the ranker's most useful group.**
+On `val`, `ranker_artist` scores NDCG@10 = 0.0449 against 0.0395 for `ranker`: +0.0054
+(95% interval +0.0038 to +0.0070), or 13.7%. Against `tt_id` alone the gain is 28.7%.
+Retrained without one group at a time, on `val`:
+
+| Without | NDCG@10 | Change | Share of SHAP in the full model |
+|---|---|---|---|
+| artist | 0.0393 | -12.4% | 44% |
+| models | 0.0419 | -6.5% | 28% |
+| pair | 0.0428 | -4.7% | 13% |
+| track | 0.0436 | -2.9% | 14% |
+| user | 0.0444 | -0.9% | 1% |
+
+Without the artist group the model falls back to the Phase 5 score. The largest single
+features are `artist_listeners`, `artist_days_since`, the two `tt_id` features and
+`album_tracks`.
+Leakage checks: a gain of 14% over Phase 5 is well short of the doubling that would
+trigger an audit, and a `ranker_artist` trained on labels shuffled within each user
+scores 0.0085 against 0.0349 for retrieval order.
+
+**The fix for popularity bias is a penalty at ranking time, with its size picked by a rule fixed in advance.**
+When the final ranker reorders a user's candidates, a candidate's score becomes its
+ranker score minus `lambda` times its popularity (log listeners), both standardised
+within the user's list.
+Rule: the largest `lambda` that costs under 2% of NDCG@10 on `val`. Swept over eight
+values:
+
+| `lambda` | NDCG@10 | Change | Tail tracks' share of slots | Coverage@10 |
+|---|---|---|---|---|
+| 0 | 0.0449 | | 20.4% | 39.1% |
+| 0.05 | 0.0445 | -0.8% | 22.2% | 40.5% |
+| 0.1 | 0.0443 | -1.3% | 24.1% | 41.9% |
+| 0.2 | 0.0438 | -2.3% | 28.1% | 44.6% |
+| 0.5 | 0.0407 | -9.4% | 41.1% | 51.8% |
+| 1 | 0.0327 | -27.1% | 62.2% | 59.1% |
+
+The rule picks 0.1. There is no free gain: every step towards the tail costs accuracy.
+Why a penalty at ranking time: it needs no retraining and its strength is one number.
+Rejected: retraining with a loss that corrects for popularity, a larger change to the
+model than this phase has room for.
+
+**`test` was scored once for Phase 6, after the owner confirmed the setting and the penalty on 2026-10-13.**
+`tune`, `ablate`, `fit`, `ranker val`, `bias tune` and `bias val` read `val` only. This is
+the ranker family's second look at `test`; the Phase 5 `ranker` was rescored with its
+frozen setting and gives the same 0.0348.
+Result on `test`, 10,280 users, every model fitted on both train splits:
+
+| Model | Recall@10 | NDCG@10 | Recall@100 | Coverage@10 |
+|---|---|---|---|---|
+| Popularity | 0.0042 | 0.0061 | 0.0292 | 0.1% |
+| Item-kNN | 0.0208 | 0.0276 | 0.1088 | 19.7% |
+| ALS | 0.0244 | 0.0284 | 0.1356 | 22.0% |
+| `tt_id` | 0.0278 | 0.0325 | 0.1468 | 28.7% |
+| `tt_id` + `ranker` | 0.0310 | 0.0348 | 0.1508 | 33.5% |
+| `tt_id` + `ranker_artist` | 0.0338 | 0.0368 | 0.1610 | 39.1% |
+
+| `ranker_artist` minus | NDCG@10 | 95% interval | Relative |
+|---|---|---|---|
+| `tt_id` | +0.0044 | +0.0027 to +0.0060 | +13.4% |
+| `ranker` | +0.0021 | +0.0006 to +0.0036 | +6.0% |
+
+Both intervals are clear of zero. As in Phase 5 the gain on `test` is about half the one
+on `val` (13.7% over `ranker` there).
+Against ALS the final system is 30% ahead on NDCG@10 and 39% on Recall@10.
+
+**Finding: every model over-serves popular tracks, and each stage of this system does so less.**
+On `test`, in the top 10. Listeners' own discoveries are 31% head, 34% middle and 35%
+tail.
+
+| Model | Head slots | Tail slots | Tail discoveries found | Gini of slots |
+|---|---|---|---|---|
+| ALS | 73.8% | 2.8% | 0.15% | 0.921 |
+| `tt_id` | 66.9% | 7.0% | 0.37% | 0.897 |
+| `tt_id` + `ranker` | 60.1% | 13.8% | 0.68% | 0.879 |
+| `tt_id` + `ranker_artist` | 51.4% | 20.4% | 1.11% | 0.842 |
+
+The gain in the tail is partly paid for at the head: `ranker_artist` finds 3.7% of head
+discoveries against 4.4% for `tt_id`.
+
+**Finding: niche listeners score lowest under every model, but the gap is not established.**
+With `ranker_artist` on `test`, NDCG@10 is 0.0347 for the niche third (interval 0.0313
+to 0.0380), 0.0383 for the middle and 0.0377 for the mainstream third (0.0343 to
+0.0412). The intervals overlap.
+On `val` the gap looked larger and, for `tt_id`, the intervals did not overlap; on `val`
+it also looked as if the artist features closed most of it. `test` confirms neither.
+On `test` the niche third is the lowest under every model; on `val` it was not for
+`ranker_artist`.
+
+**Finding: genres are shown unevenly, but no group of fans is shown to be served worse.**
+With `ranker_artist` on `test`, a genre's share of slots over its share of discoveries
+is 1.35 for hip hop, 1.17 for metal and 1.15 for electronic, and 0.61 for classical and
+soundtrack, 0.83 for jazz and blues and 0.85 for soul. Classical and jazz are
+under-shown by every model.
+By a listener's main genre, NDCG@10 runs from 0.0342 (electronic) to 0.0466 (hip hop)
+with overlapping intervals. With eight groups and no adjustment for that, this is no
+evidence of a difference.
+
+**Finding: the popularity penalty buys variety at a small, real cost.**
+On `test`, `lambda` = 0.1 moves the tail's share of slots from 20.4% to 24.1% and
+coverage@10 from 39.1% to 41.8%, and costs 0.0007 of NDCG@10 (interval -0.0011 to
+-0.0004), or 1.9%. All three listener groups lose a little; none gains.
+It is reported as an option, not made the default: whether 2% of accuracy is worth four
+points of tail exposure is a product decision, not something this data can settle.
+
+**The README screenshots of the demo show a few track titles and artists.**
+They are the one place where content from Music4All is in the repository: two pictures
+with a listener's recent tracks and recommendations, beside the dataset's citation.
+Why accepted: the agreement expects publications that include data from the database
+and asks for the citation; a picture of some twenty titles is not the database.
+The owner looks at both pictures before they are committed. They can be remade with
+made-up tracks if the dataset's owners prefer.

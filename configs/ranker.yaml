@@ -19,14 +19,23 @@ ranker:
   # Passed to XGBoost in every run.
   fixed: {tree_method: hist, subsample: 0.8, colsample_bytree: 0.8, min_child_weight: 10}
 
-  # `report` trains this: the best LambdaRank setting of the stages below on val. The
-  # stages were run starting from max_depth 6 with the other values as here.
+  # The rankers compared. Each is trained on the feature groups it lists (rank_features.GROUPS).
+  models:
+    ranker: [models, track, user, pair]                  # Phase 5
+    ranker_artist: [models, track, user, pair, artist]   # Phase 6: plus what the user has played by the artist
+  final: ranker_artist   # the one the SHAP section, the bias analysis and the demo are about
+
+  # `fit` trains these: for each model, the best LambdaRank setting of the stages below on
+  # val. Its stages are run starting from the setting given here.
   chosen:
-    n_candidates: 500              # how many of a user's candidates the ranker reorders; the rest keep retrieval order
-    max_depth: 3
-    eta: 0.1                       # learning rate
-    lambdarank_pair_method: mean   # which pairs the ranking loss compares; not tuned, topk is unstable here (see decisions.md)
-    objective: "rank:ndcg"         # LambdaRank; binary:logistic is the plain yes/no alternative
+    ranker:
+      n_candidates: 500              # how many of a user's candidates the ranker reorders; the rest keep retrieval order
+      max_depth: 3
+      eta: 0.1                       # learning rate
+      lambdarank_pair_method: mean   # which pairs the ranking loss compares; not tuned, topk is unstable here (see decisions.md)
+      objective: "rank:ndcg"         # LambdaRank; binary:logistic is the plain yes/no alternative
+    # Its stages were run starting from the `ranker` setting above.
+    ranker_artist: {n_candidates: 500, max_depth: 2, eta: 0.05, lambdarank_pair_method: mean, objective: "rank:ndcg"}
 
   # Tuned on val in stages. Each stage tries its combinations on top of the best setting so far.
   stages:
