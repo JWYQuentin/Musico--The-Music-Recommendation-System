@@ -1,4 +1,4 @@
-"""What the owner's three functions in twotower.py must return, on numbers worked out by hand."""
+"""What the towers and the loss in twotower.py must return, on numbers worked out by hand."""
 import math
 
 import numpy as np
@@ -72,7 +72,7 @@ def test_towers_pass_gradients_to_their_weights():
     assert not track.features.requires_grad  # the features themselves are not trained
 
 
-# ---- loss, stage 1
+# ---- loss: the plain form
 
 EYE2 = torch.tensor([[1.0, 0.0], [0.0, 1.0]])  # user i lines up with track i and not the other
 
@@ -110,7 +110,7 @@ def test_loss_passes_gradients_to_both_towers():
     assert u.grad.abs().sum() > 0 and v.grad.abs().sum() > 0
 
 
-# ---- loss, stage 2
+# ---- loss: popularity correction and duplicate masking
 
 
 def test_loss_log_q_hand_checked():

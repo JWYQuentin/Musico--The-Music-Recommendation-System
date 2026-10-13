@@ -218,8 +218,9 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
   - `tracks.parquet` and the demo page stay under `data/`. The demo is never hosted.
   - When checking this data, print counts and shares, not records.
   - The README and the demo page carry the full citation.
-- The owner writes the two-tower forward pass and loss by hand in Phase 4. Review that
-  code and explain problems; do not rewrite it unasked.
+- The owner wrote the two-tower forward passes and loss by hand in Phase 4
+  (`src/m4a_rec/twotower.py`). Review that code and explain problems; do not rewrite it
+  unasked.
 - Start each phase in plan mode and wait for approval before writing code.
 
 # Behavioral guidelines

@@ -3,9 +3,8 @@
 A tower turns an index into a vector of length 1. A user's score for a track is the dot
 product of their two vectors, so it lies between -1 and 1.
 
-The layers are defined here. The three functions marked "Yours to write" are the owner's:
-UserTower.forward, TrackTower.forward and in_batch_softmax_loss. tests/test_twotower.py
-says what each must return.
+The forward passes and the loss are checked against numbers worked out by hand in
+tests/test_twotower.py.
 """
 from __future__ import annotations
 
@@ -25,13 +24,10 @@ class UserTower(nn.Module):
         nn.init.normal_(self.embedding.weight, std=dim**-0.5)
 
     def forward(self, user_idx: torch.Tensor) -> torch.Tensor:
-        """Yours to write.
+        """Each user's vector, scaled to length 1.
 
         user_idx  (B,) int64, row numbers into self.embedding
-        returns   (B, dim) float32, each row scaled to length 1
-
-        Look up each user's row, then scale it to length 1.
-        Useful: torch.nn.functional.normalize.
+        returns   (B, dim) float32
         """
         return F.normalize(self.embedding(user_idx), dim=-1)
 
@@ -70,16 +66,13 @@ class TrackTower(nn.Module):
             )
 
     def forward(self, track_idx: torch.Tensor) -> torch.Tensor:
-        """Yours to write.
+        """Each track's vector, scaled to length 1.
 
         track_idx  (B,) int64, row numbers into self.embedding and self.features
-        returns    (B, dim) float32, each row scaled to length 1
+        returns    (B, dim) float32
 
-        Build a (B, dim) vector from the parts this tower has:
-          - if self.embedding is not None: the track's embedding row
-          - if self.content is not None: self.content applied to the track's feature row
-          - if it has both: their sum
-        then scale each row to length 1.
+        The vector is the track's embedding row, the content network applied to its feature
+        row, or the sum of the two, depending on which parts this tower has.
         """
         vec = None
         if self.embedding is not None:
@@ -91,6 +84,18 @@ class TrackTower(nn.Module):
 
 
 def in_batch_softmax_loss(user_vec, track_vec, temperature, log_q=None, track_idx=None):
+    """Cross-entropy over the batch: each user's own track is the right answer and the other
+    tracks in the batch are the wrong ones.
+
+    user_vec, track_vec  (B, dim) unit vectors; row i of each is one (user, track) pair
+    temperature          the scores are divided by this before the softmax
+    log_q                (B,) optional: the log of each track's share of the training pairs,
+                         subtracted from its column so that popular tracks are not pushed
+                         down for turning up often as wrong answers
+    track_idx            (B,) optional: each track's row number, used to ignore a wrong
+                         answer that is the same track as the right one
+    returns              a scalar
+    """
     batch_size = user_vec.shape[0]
 
     # scores[i, j] = user i . track j, scaled
