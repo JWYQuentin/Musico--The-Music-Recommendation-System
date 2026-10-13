@@ -28,8 +28,13 @@ small live demo. The owner is learning PyTorch through this project.
   0.0310. In this comparison every model is refitted on both train splits, so these
   numbers are not the Phase 3 and 4 ones. The trained ranker is saved under
   `data/processed/models/ranker/` for Phase 6.
-- Phase 6: not started. See README.md for the plan.
-- `pyproject.toml` lists only what Phases 1-5 use. Add a phase's libraries there when the
+- Phase 6 (artist features, bias and fairness, demo, write-up): done, 2026-10-13.
+  `ranker_artist` adds six artist features to the Phase 5 ranker and reaches test
+  NDCG@10 = 0.0368 (0.0348 without them, 0.0325 for `tt_id` alone, 0.0284 for ALS).
+  `reports/bias.md` has the popularity-bias and genre-fairness measures and the
+  popularity penalty; `python -m m4a_rec.demo` builds the demo page. The README is the
+  write-up. All six phases are done.
+- `pyproject.toml` lists only what the six phases use. Add a phase's libraries there when the
   phase starts.
 
 ## Data
@@ -48,14 +53,21 @@ Music4All-Onion, Zenodo record 6609677, CC BY 4.0. Listening events come from La
 | `data/processed/events.meta.json`, `data/processed/splits/splits.meta.json` | written beside the data: window and split boundaries, user and listen counts |
 | `data/processed/features.npz` | standardised audio, lyrics and genre features for every training track, with `track_ids` |
 | `data/processed/models/<model>/` | a trained two-tower model's `user_vecs.npy`, `track_vecs.npy`, the IDs their rows belong to, and `tracks.faiss`. `tt_id` is fitted on `retrieval_train`, `tt_id_refit` on both train splits |
-| `data/processed/recs/<model>.parquet` | the top 1,000 tracks per user from popularity, item-kNN, ALS and `tt_id`, each fitted on both train splits |
-| `data/processed/ranker/{train,infer}.parquet` | the ranker's two snapshots: one row per (user, candidate) with every feature; `train` also has `label` |
-| `data/processed/models/ranker/` | the trained ranker (`model.json`) and its feature list and tree count (`meta.json`) |
+| `data/processed/recs/<model>.parquet` | the top 1,000 tracks per user from popularity, item-kNN, ALS, `tt_id` and each ranker, all fitted on both train splits |
+| `data/processed/ranker/{train,infer}.parquet` | the rankers' two snapshots: one row per (user, candidate) with every feature; `train` also has `label` |
+| `data/processed/models/<ranker>/` | a trained ranker (`ranker`, `ranker_artist`): `model.json`, and its features, setting and tree count in `meta.json` |
+| `data/raw/music4all/` | the base Music4All dataset, unpacked: titles, artists, albums, genres, language, lyrics. Under a confidentiality agreement, see Rules |
+| `data/processed/tracks.parquet` | one row per Music4All track: title, artist, album, year, language, genre labels and one broad `genre_group` |
+| `data/processed/models/tt_id_refit/neighbours.npy` | each track's 20 nearest tracks, as row numbers into `track_vecs.npy` |
+| `data/processed/demo/index.html` | the demo page. Holds titles and artists: never commit it |
 
 - There are no likes, skips, or play durations. A row means "user played track at time".
 - Track titles, artists, and genre names are NOT in Onion. They come from the base
-  Music4All dataset, which arrived on 2026-10-10 as `data/raw/music4all.zip` (48 GB). It
-  has not been unpacked or checked yet; nothing up to Phase 5 uses it.
+  Music4All dataset, which arrived on 2026-10-10 (`data/raw/music4all.zip`, unpacked to
+  `data/raw/music4all/` without its audio). It covers every training track.
+- Of that dataset only fixed facts are used: title, artist, album, year, language, genre
+  labels. Its Spotify popularity score, its tags and its own file of listens were
+  collected after the training period ends and are never read.
 - The events file has a header row and `YYYY-MM-DD HH:MM:SS` timestamps (checked against
   the real file on 2026-10-04). `prepare.sniff` detects both at runtime; if `convert`
   fails, look at the first lines of the file before changing code.
@@ -99,11 +111,18 @@ python -m m4a_rec.coldstart report    # the same on val and test; writes reports
 python -m m4a_rec.index data/processed/models/tt_id   # builds and checks the FAISS index
 python -m m4a_rec.baselines refit    # the three baselines on both train splits, ~3 min; writes data/processed/recs/
 python -m m4a_rec.retrieval refit    # tt_id on both train splits, ~25 min; writes models/tt_id_refit/ and recs/tt_id.parquet
-python -m m4a_rec.candidates         # both ranker snapshots, ~7 min; prints each feature's mean in the two
-python -m m4a_rec.ranker tune        # the tuning stages on val; resumes from reports/ranker_tuning.json
-python -m m4a_rec.ranker ablate      # the chosen setting without each feature group, on val
-python -m m4a_rec.ranker val         # every model on val; prints, writes nothing
+python -m m4a_rec.metadata           # seconds; writes data/processed/tracks.parquet
+python -m m4a_rec.candidates         # both ranker snapshots, ~3 min; prints each feature's mean in the two
+python -m m4a_rec.ranker tune ranker_artist    # or ranker; the stages on val, resumes from reports/<model>_tuning.json
+python -m m4a_rec.ranker ablate ranker_artist  # the chosen setting without each feature group, on val
+python -m m4a_rec.ranker fit ranker_artist     # and ranker; saves the model and its lists, test untouched
+python -m m4a_rec.ranker val         # every saved list on val; prints, writes nothing
 python -m m4a_rec.ranker report      # val and test, intervals, SHAP; writes reports/ranker.md
+python -m m4a_rec.bias tune          # the popularity penalty's lambda on val; writes reports/bias_tuning.md
+python -m m4a_rec.bias val           # bias and fairness measures on val; prints
+python -m m4a_rec.bias report        # the same on test; writes reports/bias.md
+python -m m4a_rec.index data/processed/models/tt_id_refit   # index and neighbours for the demo
+python -m m4a_rec.demo               # writes data/processed/demo/index.html
 pytest -q
 pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 ```
@@ -140,12 +159,22 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
   about files or splits; `candidates.py` builds both snapshots with it; `ranker.py` trains
   on `train`, reorders `infer` and hands the lists to `evaluate.score`. A new feature goes
   in `rank_features.GROUPS` and must be computed from the history argument only.
+- A ranker is a name and the feature groups it uses, under `ranker.models` in the config,
+  with its own `chosen` setting, tuning file and saved model. `ranker fit` is the only
+  command that saves a model and its lists; `val`, `report`, `bias.py` and `demo.py` read
+  what it saved.
+- `metadata.py` turns the Music4All files into `tracks.parquet`. `bias.py` measures
+  popularity bias and genre fairness for every saved list and tries the popularity
+  penalty. `demo.py` fills the template `demo.html` with data for a sample of listeners.
+  Both get held-out information only from `evaluate.breakdown` and `evaluate.hits`, which
+  hand out lists, per-user scores and per-group totals, never the tracks a user went on
+  to play (except `hits`, for the demo's marks).
 - Every module is pure functions plus a thin `main()`. The functions take frames, paths
   and plain arguments; only `main()` calls `load_config()` and touches `data/`. Tests call
   the functions on synthetic data built in `tests/conftest.py` and never read `data/`.
   New modules follow the same shape so they can be tested the same way.
 - `load_config()` merges every file under `configs/` (`data.yaml`, `eval.yaml`,
-  `baselines.yaml`, `twotower.yaml`, `ranker.yaml`) into one dict, so
+  `baselines.yaml`, `twotower.yaml`, `ranker.yaml`, `metadata.yaml`, `bias.yaml`, `demo.yaml`) into one dict, so
   top-level keys must not collide across config files. It turns `paths` into absolute
   `Path`s and creates those directories. A new config file has to be added to it.
 - Time ranges are half-open `(start, end]` everywhere: an event exactly on a boundary
@@ -157,8 +186,8 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
   `evaluate.score`.
   - `tests/test_leakage.py` enforces this by text search: any module in `src/m4a_rec/`
     outside its allowlist fails if it contains `events.parquet`, `events_full`,
-    `val.parquet` or `test.parquet`, even in a comment. So model code may not read the
-    full subsample either.
+    `val.parquet`, `test.parquet` or the name of Music4All's own listens file, even in a
+    comment. So model code may not read the full subsample either.
   - The search covers top-level `*.py` files only. If model code goes in a subpackage,
     extend the test to search it.
 - Every split is temporal. No random row splits, no features computed from events after
@@ -175,11 +204,20 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 - XGBoost crashes the process if it is loaded after PyTorch, for the same reason.
   `src/m4a_rec/ranker.py` is the only module that imports `xgboost`; it must not import
   `torch` or any module that does (`retrieval`, `twotower`, `coldstart`, `candidates`), so
-  it reads other models' output from files. Its tests are in `tests/isolated/`, which
+  it reads other models' output from files. The same holds for `bias.py` and `demo.py`,
+  which import `ranker.py`. The tests of all three are in `tests/isolated/`, which
   `pytest` skips and `tests/test_ranker.py` runs in a process of its own.
 - XGBoost needs the OpenMP library `libomp`. Here it finds Anaconda's copy, because the
   venv is built on Anaconda's Python; elsewhere it needs `brew install libomp`.
 - Use Polars, not pandas. Keep raw data out of git.
+- The base Music4All dataset is under a confidentiality agreement the owner signed:
+  research use only, never shared, and its paper cited wherever results are published.
+  - Nothing read from it goes into git: no titles, artists, albums or lyrics in reports,
+    tests, fixtures, configs or the README. Reports show aggregates only. Tests use
+    made-up names.
+  - `tracks.parquet` and the demo page stay under `data/`. The demo is never hosted.
+  - When checking this data, print counts and shares, not records.
+  - The README and the demo page carry the full citation.
 - The owner writes the two-tower forward pass and loss by hand in Phase 4. Review that
   code and explain problems; do not rewrite it unasked.
 - Start each phase in plan mode and wait for approval before writing code.

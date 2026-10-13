@@ -21,6 +21,7 @@ def make(parts, labels):
     blocks = {"audio": vecs(n_tracks, 4), "lyrics": lyrics, "genres": np.abs(vecs(n_tracks, 6))}
     frame = snapshot(
         history, inter, vecs(n_users, 8), vecs(n_tracks, 8), vecs(n_users, 3), vecs(n_tracks, 3), blocks,
+        artist=np.arange(n_tracks) // 4, album=np.arange(n_tracks) // 2,  # four tracks an artist, two an album
         n=N, recent_days=28, short_days=7, labels=labels,
     )
     return history, frame

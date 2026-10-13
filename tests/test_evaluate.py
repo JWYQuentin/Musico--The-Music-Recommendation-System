@@ -2,7 +2,7 @@ import numpy as np
 import polars as pl
 import pytest
 
-from m4a_rec.evaluate import PAIR, metrics, only, paired_difference, per_user, relevant
+from m4a_rec.evaluate import PAIR, group_recall, metrics, only, paired_difference, per_user, relevant
 
 NO_SEEN = pl.DataFrame({"user_id": [], "track_id": []}, schema={"user_id": pl.Int64, "track_id": pl.String})
 
@@ -113,3 +113,17 @@ def test_paired_difference_hand_checked():
     assert mixed["ndcg@10"]["high"] == pytest.approx(0.196, abs=0.04)
     again = paired_difference(frame([1.0, 0.0] * 50), frame([0.0, 1.0] * 50), ["ndcg@10"], n_boot=2000, seed=0)
     assert again == mixed  # seeded
+
+
+def test_group_recall_hand_checked():
+    """u1 wants a and b and is shown a, x, b; u2 wants c and is shown y, c. With k = 2, a and c are found."""
+    _, ranked = per_user(RECS, RELEVANT, NO_SEEN, [3])
+    groups = pl.DataFrame({"track_id": ["a", "b", "x"], "group": ["head", "tail", "head"]})  # c has no group
+    got = group_recall(ranked, RELEVANT, groups, k=2)
+    assert got.columns == ["group", "relevant", "share", "found"]
+    assert got.rows() == [
+        ("head", 1, pytest.approx(1 / 3), 1.0),  # a, found in first place
+        ("no group", 1, pytest.approx(1 / 3), 1.0),  # c, found in second place
+        ("tail", 1, pytest.approx(1 / 3), 0.0),  # b is third, outside the top 2
+    ]
+    assert group_recall(ranked, RELEVANT, groups, k=3).filter(pl.col("group") == "tail")["found"][0] == 1.0

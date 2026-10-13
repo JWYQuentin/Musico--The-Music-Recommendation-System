@@ -23,6 +23,8 @@ from .config import load_config
 from .evaluate import PAIR
 from .features import load_blocks
 from .interactions import Interactions, build, load_train
+from .metadata import codes
+from .metadata import load as load_tracks
 from .rank_features import FEATURES
 from .rank_features import build as build_features
 from .reporting import table
@@ -37,6 +39,8 @@ def snapshot(
     als_user: np.ndarray,
     als_track: np.ndarray,
     blocks: dict[str, np.ndarray],
+    artist: np.ndarray,
+    album: np.ndarray,
     n: int,
     recent_days: int,
     short_days: int,
@@ -44,14 +48,14 @@ def snapshot(
 ) -> pl.DataFrame:
     """One row per (user, candidate): user_id, track_id, every feature, and `label` if `labels` is given.
 
-    `inter` is `history` as a matrix, and the vectors and `blocks` are in its user and track
-    order. Candidates are the `n` tracks the retrieval vectors score highest among those the
-    user has not played in `history`. `labels` is the listens of the period being predicted;
+    `inter` is `history` as a matrix, and the vectors, `blocks` and the `artist` and `album`
+    codes are in its user and track order. Candidates are the `n` tracks the retrieval
+    vectors score highest among those the user has not played in `history`. `labels` is the listens of the period being predicted;
     it decides the label and nothing else.
     """
     idx, scores = top_unseen(tt_user, tt_track, inter.matrix, n)
     features = build_features(
-        history, inter.user_ids, inter.track_ids, idx, scores, tt_track, als_user, als_track, blocks, recent_days, short_days
+        history, inter.user_ids, inter.track_ids, idx, scores, tt_track, als_user, als_track, blocks, artist, album, recent_days, short_days
     )
     frame = pl.DataFrame(
         {
@@ -89,6 +93,7 @@ def main() -> int:
             als_user,
             als_track,
             load_blocks(processed / "features.npz", inter.track_ids.to_list()),
+            *codes(load_tracks(processed / "tracks.parquet", inter.track_ids.to_list())),
             r["n_recs"],
             r["recent_days"],
             r["short_days"],

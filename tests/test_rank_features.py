@@ -10,6 +10,8 @@ from m4a_rec.rank_features import (
     GROUPS,
     build,
     first_and_last,
+    group_matrix,
+    lookup,
     mean_direction,
     pair_matrix,
     pair_scores,
@@ -101,6 +103,8 @@ def build_tiny(hist):
         als_user=np.array([[1.0], [2.0], [3.0]]),
         als_track=np.array([[1.0], [1.0], [1.0]]),
         blocks=blocks,
+        artist=np.array([0, 0, 1]),  # a and b are by one artist, c by another
+        album=np.array([0, 0, 1]),  # and a and b are on one album
         recent_days=28,
         short_days=7,
     )
@@ -121,6 +125,26 @@ def test_build_hand_checked():
     assert close(col("sim_lyrics"), [np.nan, 0, 0])  # c has no lyrics to compare
     assert close(col("tt_rank"), [1, 1, 1])
     assert close(col("tt_z"), [0, 0, 0]) and close(col("als_z"), [0, 0, 0])  # one candidate each
+
+
+def test_group_matrix_and_lookup_hand_checked():
+    per_track = sp.csr_matrix(np.array([[1.0, 2.0, 0.0], [0.0, 0.0, 5.0]]))  # 2 users, 3 tracks
+    by_artist = group_matrix(per_track, np.array([0, 0, 1]))  # tracks 0 and 1 share an artist
+    assert by_artist.toarray().tolist() == [[3, 0], [0, 5]]
+    assert lookup(by_artist, np.array([[1, 0], [1, 1]])).tolist() == [[0, 3], [5, 5]]
+
+
+def test_artist_features_hand_checked():
+    """User 1 is offered c, user 2 is offered b, user 3 is offered a; a and b share an artist and an album."""
+    f = build_tiny(history())
+    col = lambda name: f[name].ravel()  # noqa: E731
+    #                                          1/c        2/b        3/a
+    assert close(col("artist_tracks"), np.log1p([0, 1, 1]))  # user 2 has played a, user 3 has played b
+    assert close(col("artist_play_share"), [0, 1 / 2, 1])  # user 2: one play of a out of two plays in all
+    assert close(col("artist_days_since"), [np.nan, 56, 51])  # user 2 played a on 5 January, user 3 played b on 10 January
+    assert close(col("artist_catalog_share"), [0, 1 / 2, 1 / 2])  # one of the artist's two tracks
+    assert close(col("album_tracks"), np.log1p([0, 1, 1]))
+    assert close(col("artist_listeners"), np.log1p([1, 3, 3]))  # c's artist: user 2; a and b's artist: all three
 
 
 def test_features_ignore_everything_after_the_history():

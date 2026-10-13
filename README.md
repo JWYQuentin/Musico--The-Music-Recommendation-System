@@ -1,45 +1,183 @@
 # Two-stage music recommender on Music4All-Onion
 
-A retrieval-then-ranking recommender: a two-tower neural network picks candidate tracks,
-and a gradient-boosted model ranks them. Work in progress; Phases 1 to 5 of 6 are done.
+A recommender built the way production systems are: a two-tower neural network
+(PyTorch) retrieves 1,000 candidate tracks for each listener, and a gradient-boosted
+ranker (XGBoost, LambdaRank) reorders the best 500 of them. It is trained on 13 months
+of Last.fm listening (17.5 million plays, 14,366 listeners, 56,203 tracks), scored on a
+strict split by time, compared with three standard baselines, and then examined for
+popularity bias and genre fairness.
 
-## Phase 1: get the data and audit it
+## Results
+
+A model is scored on the tracks a listener plays for the first time in the two weeks
+after training ends. On `test`, 10,280 listeners, with every model fitted on the same
+data:
+
+| Model | Recall@10 | NDCG@10 | Recall@100 | Coverage@10 |
+|---|---|---|---|---|
+| Most popular tracks | 0.0042 | 0.0061 | 0.0292 | 0.1% |
+| Item-kNN | 0.0208 | 0.0276 | 0.1088 | 19.7% |
+| ALS matrix factorisation | 0.0244 | 0.0284 | 0.1356 | 22.0% |
+| Two-tower retrieval (`tt_id`) | 0.0278 | 0.0325 | 0.1468 | 28.7% |
+| Retrieval + ranker | 0.0310 | 0.0348 | 0.1508 | 33.5% |
+| Retrieval + ranker with artist features | 0.0338 | 0.0368 | 0.1610 | 39.1% |
+
+![NDCG@10 on test by model](reports/figures/results.png)
+
+- **Against ALS**, the strongest baseline, the full system is 30% ahead on NDCG@10 and
+  39% on Recall@10.
+- **Each stage earns its place.** Retrieval alone beats ALS by 14%. The ranker adds
+  +0.0044 NDCG@10 on top of retrieval (95% interval +0.0027 to +0.0060), and the artist
+  features account for +0.0021 of that (+0.0006 to +0.0036).
+- **It also recommends more widely**: its top 10s reach 39% of the catalogue, against
+  22% for ALS.
+
+The numbers are small because the task is hard: only tracks new to the listener count,
+out of 56,000, and a listener has a median of 8 of them. Random recommendations score
+Recall@10 = 0.00015. Intervals come from resampling listeners 2,000 times.
+
+## How it works
+
+```mermaid
+flowchart LR
+    H[Listening history] --> R[Two-tower retrieval]
+    R -- 1,000 candidates --> K[Ranker]
+    F[Scores from two models, track trends, recent listening, artist history] --> K
+    K --> T[Top 10]
+```
+
+- **Retrieval.** One network turns a listener into a vector and another turns a track
+  into one; a track is a candidate when the two line up. It is trained with an in-batch
+  softmax loss corrected for track popularity.
+- **Ranking.** A LambdaRank model scores each candidate from 25 features: its scores
+  from the two-tower model and from ALS, how the track is trending, how close it is to
+  what the listener played in the last four weeks, and what the listener has already
+  played by the same artist.
+- **No look-ahead.** The window is cut by time into training for retrieval, training for
+  the ranker, `val` and `test`. The ranker is trained in one moment and used in a later
+  one, and in both it sees only the past. A test fails if any model code names a
+  held-out file.
+
+## What the experiments showed
+
+- **The loss correction mattered most in retrieval.** Without correcting for popular
+  tracks turning up as wrong answers, the two-tower model scored below item-kNN
+  (Recall@100 of 0.094 against 0.138 on `val`).
+- **Content features help only where there is no listening.** For known tracks they add
+  nothing. For tracks removed from training entirely, a content-only tower finds 28% of
+  a listener's new tracks in its top 100, against 20% for comparing raw features and 4%
+  at random.
+- **Shallow trees win in the ranker.** Depth 2 or 3 is best and anything deeper is
+  worse: about 1% of candidates are right, and deep trees fit one month's quirks.
+- **A plain yes/no objective matches LambdaRank** on NDCG@10. LambdaRank is kept because
+  its lists cover more of the catalogue.
+- **XGBoost's default pairing method (`topk`) is unstable on this data.** It trained
+  smoothly on the full feature set and fell below plain retrieval order when a feature
+  group was removed. The `mean` method scores the same and stays stable.
+- **Artist history is the ranker's most useful group.** 61% of the tracks a listener
+  discovers are by an artist they already play. Removing those features costs 12% of
+  NDCG@10 on `val`, more than removing the model scores.
+
+![What the ranker uses](reports/figures/ranker_shap.png)
+
+## Who the system serves
+
+Measured on each listener's top 10 on `test`. Tracks are cut into head, middle and tail
+so that each third holds a third of all training listening: 3,505 head tracks, 10,446
+middle and 42,238 tail.
+
+![Where each model's slots go](reports/figures/bias_popularity.png)
+
+- **Every model favours popular tracks.** What listeners go on to discover is spread
+  evenly: 31% head, 34% middle, 35% tail. ALS gives the head 74% of its slots and the
+  final system 51%.
+- **Each stage reduces the bias while raising accuracy.** The tail's share of slots goes
+  from 3% (ALS) to 7% (retrieval) to 20% (final system), and the share of tail
+  discoveries found in the top 10 triples from retrieval to the final system, from 0.4%
+  to 1.1%.
+- **Niche listeners score lowest under every model**, 0.035 NDCG@10 against 0.038 for
+  the other two thirds in the final system, but the intervals overlap, so the gap is
+  not established.
+- **Genres are not treated alike.** Against their share of discoveries, the final system
+  over-shows hip hop (1.35 times), metal (1.17) and electronic (1.15), and under-shows
+  classical and soundtrack (0.61), jazz and blues (0.83) and soul (0.85). NDCG@10 by a
+  listener's main genre runs from 0.034 to 0.047 with overlapping intervals, so there is
+  no evidence that one group of fans is served worse.
+
+![Genre exposure](reports/figures/bias_genres.png)
+
+**One fix, and its price.** Marking popular candidates down at ranking time moves the
+tail's share of slots from 20.4% to 24.1% and coverage from 39.1% to 41.8%, for 1.9% of
+NDCG@10 (−0.0007, interval −0.0011 to −0.0004). The strength was picked on `val` by a
+rule fixed in advance: the largest that costs under 2%. There is no free gain: every
+step towards the tail costs accuracy.
+
+Full tables: `reports/bias.md` and `reports/bias_tuning.md`.
+
+## Demo
+
+A single HTML page for exploring the results. Pick one of 200 listeners to see what
+they played recently, the system's top 10 with the ranker's reasons in words, how far
+the ranker moved each track from its retrieval position, and a mark where the listener
+went on to play it. Every model's list is shown side by side, and any track opens its
+nearest tracks from a FAISS index over the retrieval model's vectors.
+
+![A listener in the demo](reports/figures/demo_listener.png)
+
+![A track and its nearest tracks](reports/figures/demo_track.png)
+
+The page is built locally and is not hosted: it contains titles and artists from the
+Music4All database, which is shared for research only. To build it:
+
+```bash
+python -m m4a_rec.index data/processed/models/tt_id_refit
+python -m m4a_rec.demo        # writes data/processed/demo/index.html; open it in a browser
+```
+
+## Limits
+
+- **Offline evaluation only.** A listener playing a track is taken as wanting it. There
+  are no skips, likes or play lengths in the data, and no way to test what a listener
+  would have done with a different list.
+- **Two weeks of `test`, one dataset.** Settings were picked on `val`, and gains there
+  were about twice what `test` confirmed, which is why every claim above is a `test`
+  number with an interval.
+- **The ranker can only reorder what retrieval finds.** A listener's top 500 candidates
+  hold about a third of what they go on to discover.
+- **Genre groups come from keyword rules** on each track's first-listed label, and some
+  calls are debatable. Small groups have wide intervals.
+- **Bias is measured against what listeners went on to play**, which was itself shaped
+  by whatever was recommending music to them at the time.
+
+What I would do next: add unplayed tracks by a listener's artists as a second source of
+candidates, replace the one-vector-per-listener tower with one that reads recent
+listening so new listeners can be served, and train the ranker with a loss that
+corrects for popularity instead of penalising it afterwards.
+
+## Reproduce it
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest -q                             # 94 tests, a few seconds
-
-python -m m4a_rec.download            # about 3 GB from Zenodo
-python -m m4a_rec.prepare convert     # slow: decompresses 2.2 GB of bz2
-python -m m4a_rec.prepare subsample   # seconds
-python -m m4a_rec.audit               # writes reports/audit.md and 3 figures
+pytest -q                             # 102 tests, a few seconds
 ```
 
-Disk needed: about 3 GB for downloads plus a few GB for the converted Parquet file.
+Music4All-Onion downloads itself (about 3 GB). The base Music4All dataset, needed from
+`metadata` onwards, has to be requested from its authors and unpacked to
+`data/raw/music4all/`. On macOS, XGBoost needs `brew install libomp` if it is not found.
 
-Then read `reports/audit.md` and answer these before Phase 2:
+| Step | Commands | Writes |
+|---|---|---|
+| Data and audit | `python -m m4a_rec.download`, `prepare convert`, `prepare subsample`, `audit` | `reports/audit.md` |
+| Splits | `python -m m4a_rec.split`, `evaluate` | four splits by time |
+| Baselines | `python -m m4a_rec.baselines tune`, `report` | `reports/baselines.md` |
+| Retrieval | `python -m m4a_rec.features`, `retrieval tune tt_id`, `retrieval report`, `coldstart report` | `reports/retrieval.md`, `reports/coldstart.md` |
+| Refit on all training data | `python -m m4a_rec.baselines refit`, `retrieval refit` | each model's lists |
+| Ranker | `python -m m4a_rec.metadata`, `candidates`, `ranker tune ranker_artist`, `ranker fit ranker`, `ranker fit ranker_artist`, `ranker report` | `reports/ranker.md` |
+| Bias and fairness | `python -m m4a_rec.bias tune`, `bias report` | `reports/bias.md` |
+| Demo | `python -m m4a_rec.index data/processed/models/tt_id_refit`, `demo` | the demo page |
 
-1. **Are the last months complete?** If the monthly chart tails off, set `window_end`
-   in `configs/data.yaml` to the last full month and rerun `subsample` and `audit`.
-2. **How many users did the 50-listen minimum drop?** Adjust `min_user_listens` if it
-   removes most of them.
-3. **How large is the repeat-play share?** A high share means evaluation should score
-   only tracks that are new to each user.
-4. **How skewed is popularity?** This sets how hard the popularity baseline is to beat.
-5. **What share of tracks has audio, lyrics, and genre features?** This bounds the
-   cold-start experiment.
-
-Record the answers in `reports/decisions.md`.
-
-## Phase 2: splits and evaluation
-
-```bash
-python -m m4a_rec.split               # writes data/processed/splits/, seconds
-python -m m4a_rec.evaluate            # prints what val and test will be scored against
-```
-
-The 13-month window is cut by time into four parts:
+The `Makefile` wraps these. The window is cut by time into four parts:
 
 | Split | Period | Listens | Used for |
 |---|---|---|---|
@@ -48,177 +186,45 @@ The 13-month window is cut by time into four parts:
 | `val` | 14 days to 2020-03-06 | 586,655 | tuning |
 | `test` | 14 days to 2020-03-20 | 584,036 | the reported numbers |
 
-A model is scored only on tracks that are new to the user: played in the period, not
-played earlier in the window. That is about 128,000 (user, track) pairs per period, a
-median of 8 per user. Metrics are Recall@K, NDCG@K and catalogue coverage at
-K = 10, 20, 100 and 500.
-
-Every model hands `evaluate.score(recs, "val")` a Polars frame with `user_id`,
-`track_id` and `score`. Only `evaluate.py` reads `val` and `test`; `tests/test_leakage.py`
-fails if any other module names those files.
-
-## Phase 3: baselines
-
-```bash
-python -m m4a_rec.baselines tune      # every grid setting on val, about 15 minutes
-python -m m4a_rec.baselines report    # the chosen settings on val and test, about 2 minutes
-```
-
-Three standard recommenders, fitted on `retrieval_train` and tuned on `val`: the most
-popular tracks, item-kNN, and ALS matrix factorisation (the last two from the `implicit`
-library). Results on `test`, 10,280 users:
-
-| Model | Recall@10 | NDCG@10 | Recall@100 | Recall@500 | Coverage@10 |
-|---|---|---|---|---|---|
-| Popularity | 0.0041 | 0.0060 | 0.0291 | 0.0936 | 0.1% |
-| Item-kNN | 0.0203 | 0.0262 | 0.1044 | 0.2754 | 20.7% |
-| ALS | 0.0234 | 0.0265 | 0.1300 | 0.3298 | 22.0% |
-
-For scale, random recommendations score Recall@10 = 0.00015 on `val`. The numbers are
-low because only tracks new to the user count, out of a catalogue of 56,000. ALS and
-item-kNN are level at the top of the list; ALS finds more of a user's new tracks deeper
-down, and popularity recommends almost the same few tracks to everyone.
-
-All four K values are in `reports/baselines.md`, the tuning grid in
-`reports/baselines_tuning.md`, and the reasons for each setting in `reports/decisions.md`.
-
-## Phase 4: two-tower retrieval and cold start
-
-```bash
-python -m m4a_rec.features                 # content features, about 30 seconds
-python -m m4a_rec.retrieval tune tt_id     # tuning on val, about 10 minutes a run; also tt_hybrid
-python -m m4a_rec.retrieval report         # tt_id and tt_hybrid on val and test, about 25 minutes
-python -m m4a_rec.coldstart report         # the cold-start test, about 10 minutes
-python -m m4a_rec.index data/processed/models/tt_id   # FAISS index for the demo
-```
-
-A two-tower model in PyTorch: one network turns a user into a vector, another turns a
-track into a vector, and a track is recommended when the two line up. Three versions
-differ in what the track network is given: the track's ID (`tt_id`), its ID plus audio,
-lyrics and genre features (`tt_hybrid`), or the features alone (`tt_content`). All are
-trained on `retrieval_train` with an in-batch softmax loss that corrects for track
-popularity.
-
-Results on `test`, 10,280 users, beside the Phase 3 baselines:
-
-| Model | Recall@10 | NDCG@10 | Recall@100 | Recall@500 | Coverage@10 |
-|---|---|---|---|---|---|
-| Popularity | 0.0041 | 0.0060 | 0.0291 | 0.0936 | 0.1% |
-| Item-kNN | 0.0203 | 0.0262 | 0.1044 | 0.2754 | 20.7% |
-| ALS | 0.0234 | 0.0265 | 0.1300 | 0.3298 | 22.0% |
-| `tt_id` | 0.0258 | 0.0304 | 0.1390 | 0.3438 | 28.9% |
-| `tt_hybrid` | 0.0261 | 0.0307 | 0.1390 | 0.3450 | 28.8% |
-
-Both two-tower models beat ALS: by 7% on Recall@100 and about 15% on NDCG@10. The
-popularity correction in the loss mattered more than any other setting; without it the
-model scored below item-kNN on `val`. Content features add nothing for tracks that
-already have listens.
-
-They matter for tracks that have none. In the cold-start test, 2,808 tracks (5%) are
-removed from training entirely and models are scored on those tracks alone. Results on
-`test`, 4,004 users:
-
-| Model | Recall@10 | NDCG@10 | Recall@100 |
-|---|---|---|---|
-| `tt_content` | 0.0575 | 0.0313 | 0.2804 |
-| Content similarity, no training | 0.0369 | 0.0197 | 0.1983 |
-| Random | 0.0021 | 0.0011 | 0.0369 |
-| Popularity, item-kNN, ALS | 0 | 0 | 0 |
-
-The content-only model finds 28% of a user's new held-out tracks in its top 100, and
-training it adds about 41% over comparing raw features directly.
-
-Full tables are in `reports/retrieval.md` and `reports/coldstart.md`, the tuning runs in
-`reports/twotower_tuning.md`.
-
-## Phase 5: ranker
-
-```bash
-python -m m4a_rec.baselines refit     # the three baselines on both train splits, about 3 minutes
-python -m m4a_rec.retrieval refit     # tt_id on both train splits, about 25 minutes
-python -m m4a_rec.candidates          # the ranker's two snapshots, about 7 minutes
-python -m m4a_rec.ranker tune         # tuning on val, about 40 minutes
-python -m m4a_rec.ranker ablate       # the chosen setting without each feature group, on val
-python -m m4a_rec.ranker report       # every model on val and test, about 4 minutes
-```
-
-The second stage: an XGBoost model (LambdaRank) that takes each user's top 500 candidates
-from `tt_id` and reorders them. It sees 19 features the retrieval model does not combine:
-the candidate's score from `tt_id` and from ALS, how the track is trending, how the user
-listens, and how close the candidate is to what the user played in the last four weeks.
-
-It is trained in one moment and used in a later one, and in both it sees only the past:
-
-| | Training | Use |
-|---|---|---|
-| History | `retrieval_train` | `retrieval_train` + `ranker_train` |
-| Candidates and scores from | models fitted on that history | the same models refitted on that history |
-| Label | did the user first play the candidate in `ranker_train`? | none; `val` and `test` are the evaluator's |
-
-Results on `test`, 10,280 users. Every model is refitted on both train splits, so the
-last two rows differ only in the ranker:
-
-| Model | Recall@10 | NDCG@10 | Recall@100 | Coverage@10 |
-|---|---|---|---|---|
-| Popularity | 0.0042 | 0.0061 | 0.0292 | 0.1% |
-| Item-kNN | 0.0208 | 0.0276 | 0.1088 | 19.7% |
-| ALS | 0.0244 | 0.0284 | 0.1356 | 22.1% |
-| `tt_id` | 0.0278 | 0.0325 | 0.1468 | 28.7% |
-| `tt_id` + ranker | 0.0310 | 0.0348 | 0.1508 | 33.5% |
-
-The ranker adds 7% to NDCG@10 and 11% to Recall@10 over `tt_id` alone. With a 95%
-interval from resampling users, the gain in NDCG@10 is 0.0010 to 0.0035 and in Recall@10
-0.0016 to 0.0046, so both are clear of zero. Against ALS the two-stage system is 22%
-ahead on NDCG@10. It also spreads its top 10s over more of the catalogue.
-
-What it uses, by SHAP value: the two models' scores (48%), the match between user and
-track (31%, half of it similarity to recent listening), track trends (17%) and user features
-(3%). Retrained without the model scores it falls below plain retrieval order.
-
-![What the ranker uses](reports/figures/ranker_shap.png)
-
-Three things the tuning showed:
-
-- Shallow trees win. Depth 3 is best and depths above 4 are clearly worse: with under 1%
-  of candidates positive, deep trees fit one month's quirks.
-- A plain yes/no objective does as well as LambdaRank on NDCG@10. LambdaRank is kept
-  because its lists cover more of the catalogue.
-- XGBoost's default way of pairing candidates (`topk`) is unstable on this data; the
-  `mean` method scores the same and is not.
-
-Full tables are in `reports/ranker.md`, the tuning runs in `reports/ranker_tuning.md`.
-XGBoost needs the OpenMP library: on macOS, `brew install libomp` if it is not found.
+The baselines and the two-tower models were first compared when fitted on
+`retrieval_train` alone (`reports/baselines.md`, `reports/retrieval.md`). The table at
+the top refits every model on both training splits, which is why its numbers are a
+little higher.
 
 ## Layout
 
 ```
-configs/data.yaml      every Phase 1 setting
-configs/eval.yaml      split lengths and K values
-configs/baselines.yaml baseline grids and chosen settings
-configs/twotower.yaml  two-tower settings, tuning stages, cold-start hold-out
-configs/ranker.yaml    ranker snapshots, feature windows, tuning stages, chosen setting
-src/m4a_rec/           download.py, prepare.py, audit.py, split.py, evaluate.py,
-                       interactions.py, baselines.py, features.py, twotower.py,
-                       retrieval.py, coldstart.py, index.py, rank_features.py,
-                       candidates.py, ranker.py, reporting.py
-tests/                 run on synthetic data in the real file layout
-reports/               decisions.md, and generated reports for the audit, baselines,
-                       retrieval, cold start and the ranker
-CLAUDE.md              project brief and rules for Claude Code
+configs/        one YAML file per step: every tunable number lives here
+src/m4a_rec/    one module per step
+  download, prepare, audit, split    data, audit and the split by time
+  evaluate                           the only module that reads val and test
+  interactions, baselines            shared user-by-track matrix; popularity, item-kNN, ALS
+  features, twotower, retrieval      content features, the towers and loss, training
+  coldstart, index                   the cold-start test, the FAISS index
+  metadata, rank_features            titles and genres; the ranker's features
+  candidates, ranker                 the ranker's two snapshots; training, SHAP, reports
+  bias, demo                         bias and fairness measures; the demo page
+tests/          hand-checked tests on synthetic data
+reports/        decisions.md (every design choice and why) and the generated reports
+CLAUDE.md       project brief and rules for Claude Code
 ```
 
-## Plan
-
-| Phase | Work |
-|---|---|
-| 1 | Setup and data audit |
-| 2 | Temporal splits, Recall@K / NDCG@K / coverage, leakage tests |
-| 3 | Baselines: popularity, item-kNN, ALS |
-| 4 | Two-tower retrieval in PyTorch, FAISS index, cold-start test |
-| 5 | XGBoost LambdaRank ranker, SHAP |
-| 6 | Popularity-bias and genre-fairness analysis, demo, write-up |
+`reports/decisions.md` records each design choice with its reason and what was rejected.
 
 ## Data and citation
 
-Music4All-Onion (Moscati et al., CIKM 2022), Zenodo record 6609677, CC BY 4.0.
-Track metadata from Music4All (Santana et al., IWSSIP 2020), available on request.
+Listening data and content features: Music4All-Onion, Zenodo record 6609677, CC BY 4.0.
+
+> Marta Moscati, Emilia Parada-Cabaleiro, Yashar Deldjoo, Eva Zangerle and Markus
+> Schedl. Music4All-Onion: A Large-Scale Multi-faceted Content-Centric Music
+> Recommendation Dataset. CIKM 2022.
+
+Track titles, artists and genres: the Music4All database, used under its agreement for
+research purposes only. It is not included in this repository and is available from its
+authors on request.
+
+> Igor André Pegoraro Santana, Fabio Pinhelli, Juliano Donini, Leonardo Catharin, Rafael
+> Biazus Mangolin, Yandre Maldonado e Gomes da Costa, Valéria Delisandra Feltrim and
+> Marcos Aurélio Domingues. Music4All: A New Music Database and its Applications. In:
+> 27th International Conference on Systems, Signals and Image Processing (IWSSIP 2020),
+> 2020, Niterói, Brazil. p. 399-404.
