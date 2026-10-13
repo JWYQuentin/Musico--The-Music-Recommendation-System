@@ -1,5 +1,7 @@
 # Two-stage music recommender on Music4All-Onion
 
+By Zunhong (Quentin) Mei, M.S. in Data Science, Columbia University.
+
 A recommender built the way production systems are: a two-tower neural network
 (PyTorch) retrieves 1,000 candidate tracks for each listener, and a gradient-boosted
 ranker (XGBoost, LambdaRank) reorders the best 500 of them. It is trained on 13 months
@@ -212,6 +214,9 @@ CLAUDE.md       project brief and rules for Claude Code
 `reports/decisions.md` records each design choice with its reason and what was rejected.
 
 ## Data and citation
+
+The code is under the MIT licence (see `LICENSE`). The datasets are not covered by it and
+keep their own terms.
 
 Listening data and content features: Music4All-Onion, Zenodo record 6609677, CC BY 4.0.
 
