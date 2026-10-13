@@ -9,7 +9,7 @@ import numpy as np
 
 HAND_CHECK = """
 import numpy as np
-from m4a_rec.index import agreement, build
+from m4a_rec.index import agreement, build, neighbours
 
 tracks = np.array([[1, 0], [0.8, 0.6], [0, 1], [-1, 0]], dtype=np.float32)
 user = np.array([[1, 0]], dtype=np.float32)  # scores 1, 0.8, 0, -1
@@ -19,6 +19,8 @@ assert ids.tolist() == [[0, 1, 2]], ids
 assert np.allclose(scores, [[1, 0.8, 0]]), scores
 assert agreement(index, user, tracks, k=3) == 1.0
 assert agreement(build(tracks[::-1].copy()), user, tracks * 2, k=3) == 0.0  # an index of other vectors disagrees
+# each track's nearest other track: 0 and 1 are closest to each other, 2 to 1, and 3 (pointing away) to 2
+assert neighbours(index, tracks, 1).tolist() == [[1], [0], [1], [2]], neighbours(index, tracks, 1)
 """
 
 
@@ -34,4 +36,6 @@ def test_index_command_writes_an_index_that_matches_numpy(tmp_path):
     done = subprocess.run([sys.executable, "-m", "m4a_rec.index", str(tmp_path)], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     assert (tmp_path / "tracks.faiss").exists()
+    near = np.load(tmp_path / "neighbours.npy")
+    assert near.shape == (500, 20) and not (near == np.arange(500)[:, None]).any()  # no track is its own neighbour
     assert "500 tracks; top 100 agree with numpy for 100.0% of 40 users" in done.stdout

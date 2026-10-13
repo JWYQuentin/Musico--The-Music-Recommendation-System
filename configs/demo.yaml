@@ -1,0 +1,12 @@
+# Phase 6 demo settings.
+
+demo:
+  n_users: 200     # listeners in the page, drawn at random from those the test period is scored on
+  seed: 42
+  split: test      # the period whose recommendations are shown, with a mark where the listener went on to play the track
+  k: 10            # recommendations shown per model
+  recent: 15       # most recently played tracks shown per listener
+  top_artists: 5   # most played artists named in a listener's profile
+  reasons: 3       # reasons shown per recommendation: its largest positive SHAP values
+  neighbours: 10   # similar tracks shown per track, from the FAISS index over this model's vectors
+  neighbours_model: tt_id_refit

@@ -28,6 +28,14 @@ GROUPS = {
     ],
     "user": ["user_tracks", "user_plays_recent", "user_new_share", "user_mainstream", "user_days_since_last"],
     "pair": ["recent_affinity", "sim_audio", "sim_lyrics", "sim_genres", "pop_gap"],
+    "artist": [
+        "artist_tracks",
+        "artist_play_share",
+        "artist_days_since",
+        "artist_catalog_share",
+        "album_tracks",
+        "artist_listeners",
+    ],
 }
 FEATURES = [name for names in GROUPS.values() for name in names]
 
@@ -64,15 +72,31 @@ def pair_scores(user_vecs: np.ndarray, track_vecs: np.ndarray, idx: np.ndarray) 
     return out
 
 
-def pair_matrix(pairs: pl.DataFrame, user_ids: pl.Series, track_ids: pl.Series) -> sp.csr_matrix:
-    """A users x tracks matrix with 1 for every (user_id, track_id) row of `pairs`."""
+def pair_matrix(pairs: pl.DataFrame, user_ids: pl.Series, track_ids: pl.Series, values: str | None = None) -> sp.csr_matrix:
+    """A users x tracks matrix with 1, or the `values` column, for every (user_id, track_id) row of `pairs`."""
     rows = pairs.join(user_ids.to_frame().with_row_index("u"), on="user_id").join(
         track_ids.to_frame().with_row_index("t"), on="track_id"
     )
+    data = np.ones(rows.height) if values is None else rows[values].to_numpy()
     return sp.csr_matrix(
-        (np.ones(rows.height, dtype=np.float32), (rows["u"].to_numpy(), rows["t"].to_numpy())),
-        shape=(len(user_ids), len(track_ids)),
+        (data.astype(np.float32), (rows["u"].to_numpy(), rows["t"].to_numpy())), shape=(len(user_ids), len(track_ids))
     )
+
+
+def group_matrix(per_track: sp.csr_matrix, codes: np.ndarray) -> sp.csr_matrix:
+    """Users x groups: a users x tracks matrix summed over the tracks that share a code (an artist or an album)."""
+    n = len(codes)
+    member = sp.csr_matrix((np.ones(n, dtype=np.float32), (np.arange(n), codes)), shape=(n, int(codes.max()) + 1))
+    return (per_track @ member).tocsr()
+
+
+def lookup(matrix: sp.csr_matrix, cols: np.ndarray) -> np.ndarray:
+    """matrix[i, cols[i, j]] for every i and j, as a dense array the shape of `cols`."""
+    out = np.empty(cols.shape, dtype=np.float32)
+    for start in range(0, cols.shape[0], BATCH):
+        dense = matrix[start : start + BATCH].toarray()
+        out[start : start + BATCH] = np.take_along_axis(dense, cols[start : start + BATCH], axis=1)
+    return out
 
 
 def mean_direction(played: sp.csr_matrix, track_vecs: np.ndarray) -> np.ndarray:
@@ -143,6 +167,45 @@ def user_stats(
     }
 
 
+def artist_stats(
+    history: pl.DataFrame,
+    pairs: pl.DataFrame,
+    user_ids: pl.Series,
+    track_ids: pl.Series,
+    idx: np.ndarray,
+    artist: np.ndarray,
+    album: np.ndarray,
+    now,
+) -> dict:
+    """What each user has played by each candidate's artist, as of `now`. One (users, N) array per feature.
+
+    `artist` and `album` give an integer code per track, in `track_ids` order.
+    """
+    played = pair_matrix(pairs, user_ids, track_ids)
+    plays = pair_matrix(history.group_by(["user_id", "track_id"]).len(name="plays"), user_ids, track_ids, values="plays")
+    by_artist = group_matrix(played, artist)  # tracks of each artist a user has played
+    tracks = lookup(by_artist, artist[idx])
+    artist_plays = lookup(group_matrix(plays, artist), artist[idx])
+    total_plays = np.asarray(plays.sum(axis=1))  # (users, 1); every user in the history has at least one
+
+    # a user's last play of each artist, stored as days ago plus 1 so that 0 can mean "never"
+    code = pl.DataFrame({"track_id": track_ids, "a": artist})
+    last = pairs.join(code, on="track_id").group_by(["user_id", "a"]).agg(pl.col("last").max())
+    last = last.join(user_ids.to_frame().with_row_index("u"), on="user_id")
+    days = (now - last["last"]).dt.total_seconds().to_numpy() / 86400
+    ago = sp.csr_matrix((days + 1, (last["u"].to_numpy(), last["a"].to_numpy())), shape=by_artist.shape)
+    since = lookup(ago, artist[idx])
+
+    return {
+        "artist_tracks": np.log1p(tracks),
+        "artist_play_share": artist_plays / total_plays,
+        "artist_days_since": np.where(since > 0, since - 1, np.nan),
+        "artist_catalog_share": tracks / np.bincount(artist)[artist[idx]],
+        "album_tracks": np.log1p(lookup(group_matrix(played, album), album[idx])),
+        "artist_listeners": np.log1p(by_artist.getnnz(axis=0))[artist[idx]],
+    }
+
+
 def build(
     history: pl.DataFrame,
     user_ids: pl.Series,
@@ -153,14 +216,16 @@ def build(
     als_user: np.ndarray,
     als_track: np.ndarray,
     blocks: dict[str, np.ndarray],
+    artist: np.ndarray,
+    album: np.ndarray,
     recent_days: int,
     short_days: int,
 ) -> dict[str, np.ndarray]:
     """Every feature in FEATURES as a (users, N) array, for candidates `idx` with scores `tt_scores`.
 
-    Row i of `idx` and `tt_scores` is user_ids[i]'s candidates, best first. Vectors and
-    `blocks` are in `user_ids` and `track_ids` order and must come from models and data
-    that saw nothing after `history`.
+    Row i of `idx` and `tt_scores` is user_ids[i]'s candidates, best first. Vectors,
+    `blocks`, `artist` and `album` are in `user_ids` and `track_ids` order. The vectors
+    must come from models that saw nothing after `history`; who made a track is a fixed fact.
     """
     now = history["timestamp"].max()
     recent = now - timedelta(days=recent_days)
@@ -190,4 +255,5 @@ def build(
         sim = pair_scores(mean_direction(played, block), unit(block), idx)
         has = (block != 0).any(axis=1)  # a track with an all-zero vector has no direction to compare
         out[f"sim_{name}"] = np.where(has[idx], sim, np.nan)
+    out |= artist_stats(history, pairs, user_ids, track_ids, idx, artist, album, now)
     return {name: np.asarray(out[name], dtype=np.float32) for name in FEATURES}
