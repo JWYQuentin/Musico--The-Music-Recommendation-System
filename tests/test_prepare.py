@@ -62,7 +62,7 @@ def test_subsample_respects_window_and_user_rules(full_parquet, tmp_path):
     assert df.group_by("user_id").len()["len"].min() >= 50
     assert not set(df["user_id"].to_list()) & set(range(10))  # light users never sampled
     assert meta["listens"] == df.height
-    # sorted by user, then time: what the sequence models in Phase 4 rely on
+    # sorted by user, then time
     assert df.equals(df.sort(["user_id", "timestamp"]))
 
 
