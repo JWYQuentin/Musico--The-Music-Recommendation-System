@@ -95,7 +95,7 @@ def test_report_renders():
     assert '| tt_id | {"dim": 128} |' in md
 
 
-# ---- The tests below train a model, so they need the owner's three functions in twotower.py.
+# ---- The tests below train a model, so they run the towers and the loss in twotower.py.
 
 # One batch holds all 100 pairs, and patience equals max_epochs so training never stops early.
 CFG = {"seed": 0, "device": "cpu", "batch_size": 128, "max_epochs": 60, "patience": 60, "select_on": "own_group"}

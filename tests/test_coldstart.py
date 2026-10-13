@@ -69,7 +69,7 @@ def test_render():
     assert "| random | 0.2500 |" in md
 
 
-# ---- The test below trains a model, so it needs the owner's three functions in twotower.py.
+# ---- The test below trains a model, so it runs the towers and the loss in twotower.py.
 
 
 def test_content_model_recommends_a_track_it_never_trained_on():
