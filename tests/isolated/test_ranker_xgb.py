@@ -5,14 +5,20 @@ import pytest
 
 from m4a_rec.evaluate import PAIR
 from m4a_rec.ranker import (
-    TWO_STAGE,
     explain,
+    features_of,
+    load,
+    predict,
     render_report,
     render_tuning,
     rerank,
+    results_figure,
     run,
+    save,
+    shap_figure,
     shap_summary,
     shap_values,
+    shown,
     to_dmatrix,
     training_rows,
 )
@@ -125,25 +131,53 @@ def test_shap_values_add_up_and_point_at_the_signal():
 def test_tuning_table_puts_the_best_run_first():
     m = lambda v: {"ndcg@10": v, "recall@10": 0.1, "recall@20": 0.2, "recall@100": 0.3, "coverage@10": 0.4}  # noqa: E731
     rows = [{"params": {"max_depth": 4}, "rounds": 100, "metrics": m(0.03)}, {"params": {"max_depth": 6}, "rounds": 250, "metrics": m(0.04)}]
-    md = render_tuning(rows, "ndcg@10", ks=[10, 20, 100, 500])
+    md = render_tuning(rows, "ndcg@10", [10, 20, 100, 500], "ranker_artist")
+    assert "python -m m4a_rec.ranker tune ranker_artist" in md
     assert "| max_depth | trees | ndcg@10 | recall@10 | recall@20 | recall@100 | coverage@10 |" in md
     assert md.index("| 6 | 250 | 0.0400 |") < md.index("| 4 | 100 | 0.0300 |")
+
+
+def test_features_of_lists_the_groups_in_the_order_given():
+    assert features_of(["models"]) == ["tt_rank", "tt_z", "als_rank", "als_z"]
+    assert features_of(["user", "models"])[:2] == ["user_tracks", "user_plays_recent"]
+    assert shown("ranker") == "tt_id + ranker"
+
+
+def test_a_saved_model_gives_the_scores_it_was_kept_for(tmp_path):
+    train, infer = candidates(seed=0), candidates(seed=1).drop("label")
+    result = run(train, infer, FEATURES, PARAMS, CFG, top1(candidates(seed=1)), log=lambda m: None)
+    save(result["booster"], FEATURES, PARAMS, result["rounds"], tmp_path / "model")
+    booster, meta = load(tmp_path / "model")
+    assert meta == {"features": FEATURES, "params": PARAMS, "trees": result["rounds"]}
+    assert predict(booster, meta, infer) == pytest.approx(result["scores"])
 
 
 def test_report_renders():
     ks = [10, 20, 100]
     one = {"users": 1234, **{f"{m}@{k}": 0.02 for m in ("recall", "ndcg", "coverage", "short") for k in ks}}
     better = {**one, "ndcg@10": 0.03}
-    results = {"tt_id": {"params": {"dim": 256}, "val": one}, TWO_STAGE: {"params": {"max_depth": 6, "trees": 200}, "val": better}}
-    gaps = {"val": {f"{m}@{k}": {"diff": 0.01, "low": 0.004, "high": 0.016} for m in ("recall", "ndcg") for k in ks}}
-    summary = {"tt_z": 0.6, "track_listeners": 0.3, "sim_audio": 0.1}
+    final = shown("ranker_artist")
+    results = {"tt_id": {"params": {"dim": 256}, "val": one}, final: {"params": {"max_depth": 6, "trees": 200}, "val": better}}
+    gap = {f"{m}@{k}": {"diff": 0.01, "low": 0.004, "high": 0.016} for m in ("recall", "ndcg") for k in ks}
+    gaps = [{"model": final, "against": "tt_id", "val": gap}]
+    summary = {"tt_z": 0.6, "artist_tracks": 0.3, "sim_audio": 0.1}
     ablation = [{"without": "models", "rounds": 100, "metrics": {**one, "ndcg@10": 0.015}}]
     example = {"user_id": 7, "track_id": "x", "tt_rank": 42, "parts": [("tt_z", 1.5, 0.8), ("sim_audio", float("nan"), -0.1)]}
-    md = render_report(results, gaps, {"tt_id": {"val": {**one, "ndcg@10": 0.01}}}, summary, ablation, example, ("val",), ks, "ndcg@10", 2000)
+    before = {"tt_id": {"val": {**one, "ndcg@10": 0.01}}}
+    md = render_report(results, gaps, before, final, summary, ablation, example, ("val",), ks, "ndcg@10", 2000)
     assert "## val (1,234 users scored)" in md and "resampling users 2,000 times" in md
-    assert f"| val | ndcg@10 | 0.0200 | 0.0300 | 0.0100 | +0.0040 to +0.0160 | +50.0% |" in md
+    assert "## `tt_id + ranker_artist` against `tt_id`" in md
+    assert "| val | ndcg@10 | 0.0200 | 0.0300 | 0.0100 | +0.0040 to +0.0160 | +50.0% |" in md
     assert "| val | tt_id | ndcg@10 | 0.0100 | 0.0200 | +100.0% |" in md  # retrieval_train only, then both
-    assert "| tt_z | models | 0.6000 | 60.0% |" in md and "| models | 60.0% |" in md
+    assert "| tt_z | models | 0.6000 | 60.0% |" in md and "| artist | 30.0% |" in md
+    assert "| user |" not in md  # a group with no feature in the model is left out
     assert "| models | 0.0150 | 0.0200 | 0.0200 | -50.0% |" in md
     assert "candidate number 42 from retrieval" in md and "| tt_z | 1.5000 | 0.8000 |" in md
     assert "| sim_audio | missing | -0.1000 |" in md
+
+
+def test_figures_render(tmp_path):
+    results = {name: {"test": {"ndcg@10": value}} for name, value in [("als", 0.028), ("tt_id", 0.032), ("tt_id + ranker_artist", 0.04)]}
+    results_figure(results, "tt_id + ranker_artist", "test", "ndcg@10", tmp_path / "results.png")
+    shap_figure({"artist_tracks": 0.4, "tt_z": 0.3, "sim_audio": 0.01}, tmp_path / "shap.png")
+    assert (tmp_path / "results.png").stat().st_size > 0 and (tmp_path / "shap.png").stat().st_size > 0

@@ -99,6 +99,22 @@ def paired_difference(a: pl.DataFrame, b: pl.DataFrame, columns: list[str], n_bo
     return out
 
 
+def group_recall(ranked: pl.DataFrame, relevant: pl.DataFrame, track_groups: pl.DataFrame, k: int) -> pl.DataFrame:
+    """Per group of tracks: its relevant pairs, their share of all relevant pairs, and the share found in the top k.
+
+    `ranked` comes from per_user and `track_groups` has track_id and group. A relevant
+    track with no group is counted under "no group".
+    """
+    found = ranked.filter((pl.col("rank") <= k) & (pl.col("hit") == 1)).select(*PAIR, found=pl.lit(1.0))
+    rel = (
+        relevant.join(track_groups, on="track_id", how="left")
+        .join(found, on=PAIR, how="left")
+        .with_columns(pl.col("group").fill_null("no group"), pl.col("found").fill_null(0.0))
+    )
+    by_group = rel.group_by("group").agg(relevant=pl.len(), found=pl.col("found").mean())
+    return by_group.with_columns(share=pl.col("relevant") / rel.height).select("group", "relevant", "share", "found").sort("group")
+
+
 def truth(splits_dir: Path, split: str) -> tuple[pl.DataFrame, pl.DataFrame, int]:
     """Relevant pairs, already-played pairs, and training-catalogue size for val or test."""
     load = lambda name: pl.read_parquet(splits_dir / f"{name}.parquet", columns=PAIR)  # noqa: E731
@@ -131,6 +147,32 @@ def difference(recs_a: pl.DataFrame, recs_b: pl.DataFrame, split: str) -> dict:
     b, _ = per_user(recs_b, rel, seen, ks)
     columns = [f"{metric}@{k}" for metric in ("recall", "ndcg") for k in ks]
     return paired_difference(a, b, columns, boot["n"], boot["seed"])
+
+
+def breakdown(recs: pl.DataFrame, split: str, k: int, track_groups: dict[str, pl.DataFrame]) -> dict:
+    """What the bias analysis needs from val or test, without naming a track anyone went on to play.
+
+    lists   each scored user's first k tracks once already-played ones are dropped: user_id, track_id, rank
+    users   each scored user's own recall@K and ndcg@K
+    found   for each grouping in `track_groups` (a name -> frame with track_id and group), the
+            frame group_recall returns at k
+    """
+    cfg = load_config()
+    rel, seen, _ = truth(cfg["paths"]["processed"] / "splits", split)
+    users, ranked = per_user(recs, rel, seen, cfg["metrics"]["ks"])
+    return {
+        "lists": ranked.filter(pl.col("rank") <= k).select(*PAIR, "rank"),
+        "users": users,
+        "found": {name: group_recall(ranked, rel, groups, k) for name, groups in track_groups.items()},
+    }
+
+
+def hits(recs: pl.DataFrame, split: str, k: int, users: list[int]) -> pl.DataFrame:
+    """For the demo page only: the first k tracks of `users`, with hit = 1 where the user went on to play the track."""
+    cfg = load_config()
+    rel, seen, _ = truth(cfg["paths"]["processed"] / "splits", split)
+    _, ranked = per_user(recs.filter(pl.col("user_id").is_in(users)), rel, seen, [k])
+    return ranked.select(*PAIR, "rank", "hit")
 
 
 def main() -> int:

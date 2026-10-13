@@ -8,7 +8,8 @@ that does, it runs as its own command, and its tests run it in a subprocess.
 
 Usage: python -m m4a_rec.index data/processed/models/<model>
        reads track_vecs.npy and user_vecs.npy there, writes tracks.faiss, and checks the
-       index against plain numpy on the first users.
+       index against plain numpy on the first users. Also writes neighbours.npy: each
+       track's nearest other tracks, as row numbers into track_vecs.npy, for the demo.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ import faiss
 import numpy as np
 
 CHECK_USERS, CHECK_K = 1000, 100  # how much of the index the check compares with numpy
+NEIGHBOURS = 20  # nearest tracks saved for each track
 
 
 def build(track_vecs: np.ndarray) -> faiss.IndexFlatIP:
@@ -35,6 +37,16 @@ def agreement(index: faiss.IndexFlatIP, user_vecs: np.ndarray, track_vecs: np.nd
     return float(np.isclose(found, exact, atol=1e-5).all(axis=1).mean())
 
 
+def neighbours(index: faiss.IndexFlatIP, track_vecs: np.ndarray, k: int) -> np.ndarray:
+    """Each track's k nearest other tracks, nearest first: (tracks, k) row numbers."""
+    k = min(k, track_vecs.shape[0] - 1)
+    _, ids = index.search(np.ascontiguousarray(track_vecs, dtype=np.float32), k + 1)
+    out = np.empty((len(ids), k), dtype=np.int32)
+    for i, row in enumerate(ids):
+        out[i] = row[row != i][:k]  # the track itself is among its own nearest
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if len(argv) != 1:
@@ -45,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     user_vecs = np.load(directory / "user_vecs.npy")[:CHECK_USERS]
     index = build(track_vecs)
     faiss.write_index(index, str(directory / "tracks.faiss"))
+    np.save(directory / "neighbours.npy", neighbours(index, track_vecs, NEIGHBOURS))
     share = agreement(index, user_vecs, track_vecs, CHECK_K)
     print(f"wrote {directory / 'tracks.faiss'}: {index.ntotal:,} tracks; top {CHECK_K} agree with numpy for {share:.1%} of {len(user_vecs):,} users")
     return 0 if share == 1.0 else 1
