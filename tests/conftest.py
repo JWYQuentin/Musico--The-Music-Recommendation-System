@@ -68,3 +68,55 @@ def parts(events):
     from m4a_rec.split import boundaries, split
 
     return split(events, boundaries(events["timestamp"].max(), **SPLIT_DAYS))
+
+
+@pytest.fixture(scope="session")
+def served(tmp_path_factory, parts):
+    """What a bundle of both synthetic train splits is made from. Random vectors stand in
+    for the two-tower model and ALS, saved in their model directories' layout."""
+    import polars as pl
+
+    from m4a_rec.baselines import save_als
+    from m4a_rec.interactions import build
+    from m4a_rec.rank_features import unit
+
+    history = pl.concat([parts["retrieval_train"], parts["ranker_train"]])
+    inter = build(history, "log")
+    n_users, n_tracks = inter.matrix.shape
+    rng = np.random.default_rng(0)
+    vecs = lambda rows, dim: rng.standard_normal((rows, dim)).astype(np.float32)  # noqa: E731
+    models = tmp_path_factory.mktemp("models")
+    out = {"history": history, "inter": inter, "dirs": {}}
+    for name, dim in (("tt", 8), ("als", 3)):
+        out[name] = (vecs(n_users, dim), vecs(n_tracks, dim))
+        if name == "tt":
+            out[name] = tuple(unit(v) for v in out[name])  # the towers' vectors have length 1
+        out["dirs"][name] = models / name
+        save_als(models / name, inter, *out[name], {"weighting": "log", "regularization": 0.1, "alpha": 10})
+    lyrics = vecs(n_tracks, 5)
+    lyrics[::7] = 0  # every seventh track has no lyrics
+    out["blocks"] = {
+        "audio": vecs(n_tracks, 4),
+        "lyrics": lyrics,
+        "has_lyrics": (lyrics != 0).any(axis=1, keepdims=True).astype(np.float32),
+        "genres": np.abs(vecs(n_tracks, 6)),
+    }
+    out["artist"], out["album"] = np.arange(n_tracks) // 4, np.arange(n_tracks) // 2  # four tracks an artist, two an album
+    out["titles"] = pl.DataFrame(
+        {"track_id": inter.track_ids, "title": [f"Song {i}" for i in range(n_tracks)], "artist": [f"Band {i // 4}" for i in range(n_tracks)]}
+    )
+    out["settings"] = {"n_recs": 20, "recent_days": 28, "short_days": 7, "fold_in": "log", "reasons": 3}
+    return out
+
+
+@pytest.fixture(scope="session")
+def write_bundle(served):
+    """Writes the synthetic bundle to a directory, with the ranker saved in `ranker`, and loads it."""
+    from m4a_rec.bundle import load, write
+
+    def write_to(directory, ranker):
+        s = served
+        write(directory, s["history"], s["dirs"]["tt"], s["dirs"]["als"], ranker, s["blocks"], s["artist"], s["album"], s["titles"], s["settings"])
+        return load(directory)
+
+    return write_to

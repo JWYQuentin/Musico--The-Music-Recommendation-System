@@ -1,6 +1,6 @@
 """XGBoost crashes when loaded into a process that has loaded PyTorch, as this test run has.
 
-So the tests of ranker.py, and of the modules that import it (bias.py, demo.py), live in
+So the tests of ranker.py, and of the modules that import it (bias.py, demo.py, serve.py, api.py), live in
 tests/isolated/, which the normal run skips, and run here in a process of their own.
 This file must not import those modules or xgboost.
 """

@@ -7,7 +7,8 @@ A recommender built the way production systems are: a two-tower neural network
 ranker (XGBoost, LambdaRank) reorders the best 500 of them. It is trained on 13 months
 of Last.fm listening (17.5 million plays, 14,366 listeners, 56,203 tracks), scored on a
 strict split by time, compared with three standard baselines, and then examined for
-popularity bias and genre fairness.
+popularity bias and genre fairness. It also runs as a local API that recommends for
+listeners the models have never seen, from the listens they hand in.
 
 ## Results
 
@@ -136,6 +137,51 @@ python -m m4a_rec.index data/processed/models/tt_id_refit
 python -m m4a_rec.demo        # writes data/processed/demo/index.html; open it in a browser
 ```
 
+## Use it: a local API
+
+The trained system also runs as a service. Both stages run at request time, and it
+recommends for any listener, including someone the models never saw, from their listens.
+
+```bash
+python -m m4a_rec.bundle      # gathers the trained models into data/processed/serving/, seconds
+python -m m4a_rec.api         # then open http://127.0.0.1:8000/docs to try every call
+```
+
+| Call | Returns |
+|---|---|
+| `GET /users/{user_id}/recommendations?k=10` | a listener in the data, from the vector learned for them |
+| `POST /recommendations` | anyone, from their listens: `{"plays": [{"track_id": "...", "timestamp": "..."}], "k": 10}` |
+| `GET /tracks/{track_id}/similar?k=10` | the nearest tracks in the retrieval model's space |
+| `GET /health` | what the service holds |
+
+Each recommendation comes with its place before the ranker and, unless `explain=false`,
+the ranker's reasons in words. Track IDs are Music4All's. A listen without a time counts
+as played when the data ends (21 February 2020), and IDs not in the catalogue are named
+in the reply.
+
+- **Someone new gets vectors from their listens**, with no training at request time: the
+  average direction of their tracks in the retrieval model's space, and ALS's own
+  least-squares solve against its track vectors.
+- **It reproduces the offline results.** Run for all 14,350 listeners, it gives every one
+  of them the same top 10 as the saved lists, and the same scores on `val` and `test`.
+- **New listeners do nearly as well in the top 10.** 1,435 listeners were left out of the
+  retrieval model and ALS, then served from their listens alone. On `test` they score
+  NDCG@10 = 0.0332, against 0.0351 when the models had trained on them (difference
+  −0.0020, interval −0.0055 to +0.0015) and 0.0063 for the most popular tracks. Deeper
+  in the list the gap is real: Recall@500 is 0.30 against 0.36. The ranker matters more
+  for them, lifting NDCG@10 from 0.0269 for retrieval alone. It had seen their earlier
+  listens in training, so this is slightly optimistic.
+- **Fast:** a median of 21 ms per request for a known listener and 56 ms for someone new,
+  on an Apple-silicon Mac with 10 cores.
+
+**Docker.** `make docker-build && make docker-run` runs the same service in a container.
+The image holds code only, no PyTorch, 314 MB compressed. The bundle is mounted
+read-only when the container starts, and the port is published on this machine only.
+
+Like the demo, the service stays on this machine: its replies carry titles and artists
+from the Music4All database, which is shared for research only. Full numbers are in
+`reports/serving.md`.
+
 ## Limits
 
 - **Offline evaluation only.** A listener playing a track is taken as wanting it. There
@@ -153,15 +199,16 @@ python -m m4a_rec.demo        # writes data/processed/demo/index.html; open it i
 
 What I would do next: add unplayed tracks by a listener's artists as a second source of
 candidates, replace the one-vector-per-listener tower with one that reads recent
-listening so new listeners can be served, and train the ranker with a loss that
+listening, so that a new listener's vector is learned rather than averaged from their
+tracks, and train the ranker with a loss that
 corrects for popularity instead of penalising it afterwards.
 
 ## Reproduce it
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest -q                             # 102 tests, a few seconds
+pip install -e ".[train,serve,dev]"   # the service alone needs only ".[serve]"
+pytest -q                             # 117 tests, a few seconds
 ```
 
 Music4All-Onion downloads itself (about 3 GB). The base Music4All dataset, needed from
@@ -178,6 +225,7 @@ Music4All-Onion downloads itself (about 3 GB). The base Music4All dataset, neede
 | Ranker | `python -m m4a_rec.metadata`, `candidates`, `ranker tune ranker_artist`, `ranker fit ranker`, `ranker fit ranker_artist`, `ranker report` | `reports/ranker.md` |
 | Bias and fairness | `python -m m4a_rec.bias tune`, `bias report` | `reports/bias.md` |
 | Demo | `python -m m4a_rec.index data/processed/models/tt_id_refit`, `demo` | the demo page |
+| Service | `python -m m4a_rec.newcomers`, `bundle newcomers`, `bundle`, `serve report` | `reports/serving.md`, the bundle the API serves |
 
 The `Makefile` wraps these. The window is cut by time into four parts:
 
@@ -206,6 +254,8 @@ src/m4a_rec/    one module per step
   metadata, rank_features            titles and genres; the ranker's features
   candidates, ranker                 the ranker's two snapshots; training, SHAP, reports
   bias, demo                         bias and fairness measures; the demo page
+  bundle, serve, api                 the service: its bundle, both stages at request time, HTTP
+  newcomers                          the models refitted without 10% of listeners, for the new-listener test
 tests/          hand-checked tests on synthetic data
 reports/        decisions.md (every design choice and why) and the generated reports
 CLAUDE.md       project brief and rules for Claude Code

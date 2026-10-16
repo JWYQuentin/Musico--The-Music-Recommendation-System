@@ -3,9 +3,10 @@
 ranker:
   # The two moments the ranker lives in. Everything a snapshot uses comes from its `history`:
   # the listens, the retrieval model (a directory under data/processed/models) and the ALS fit.
+  # `als_model` names a directory to save that ALS fit in; the Phase 7 service reads it.
   snapshots:
     train: {history: [retrieval_train], retrieval_model: tt_id, labels: ranker_train}
-    infer: {history: [retrieval_train, ranker_train], retrieval_model: tt_id_refit}
+    infer: {history: [retrieval_train, ranker_train], retrieval_model: tt_id_refit, als_model: als_refit}
 
   n_recs: 1000        # candidates per user from the retrieval model, and the length of the final list
   recent_days: 28     # "recent" in the features: the last four weeks of the history
