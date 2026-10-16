@@ -4,6 +4,12 @@ Nothing here reads a file or knows about splits. Every function takes the listen
 some moment and describes tracks, users and pairs as of the last of those listens, so the
 same code builds the snapshot the ranker is trained on and the one it is used on.
 
+What needs everyone's listens (the track numbers, how many users play each artist) is
+computed by `population`. With that computed once, `build` can describe a few users from
+their own listens alone and give the rows a build over everyone gives them: that is how
+the Phase 7 service runs it for one listener at a time. The service also computes `scaled`
+once, the track vectors `build` would otherwise rescale on every call.
+
 A value that cannot be computed (a share of nothing, a similarity to a track with no
 lyrics) is NaN, which XGBoost treats as missing.
 """
@@ -175,11 +181,13 @@ def artist_stats(
     idx: np.ndarray,
     artist: np.ndarray,
     album: np.ndarray,
+    artist_users: np.ndarray,
     now,
 ) -> dict:
     """What each user has played by each candidate's artist, as of `now`. One (users, N) array per feature.
 
-    `artist` and `album` give an integer code per track, in `track_ids` order.
+    `artist` and `album` give an integer code per track, in `track_ids` order. `artist_users`
+    is how many users have played each artist, by code, from `population`.
     """
     played = pair_matrix(pairs, user_ids, track_ids)
     plays = pair_matrix(history.group_by(["user_id", "track_id"]).len(name="plays"), user_ids, track_ids, values="plays")
@@ -202,8 +210,37 @@ def artist_stats(
         "artist_days_since": np.where(since > 0, since - 1, np.nan),
         "artist_catalog_share": tracks / np.bincount(artist)[artist[idx]],
         "album_tracks": np.log1p(lookup(group_matrix(played, album), album[idx])),
-        "artist_listeners": np.log1p(by_artist.getnnz(axis=0))[artist[idx]],
+        "artist_listeners": np.log1p(artist_users)[artist[idx]],
     }
+
+
+def scaled(tt_track: np.ndarray, blocks: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """The track vectors `build` compares users with, each row scaled to length 1, and which tracks have content features.
+
+    It depends on the tracks alone, so a caller that runs `build` many times computes it
+    once and hands it in.
+    """
+    out = {"tt": unit(tt_track)}
+    for name in ("audio", "lyrics", "genres"):
+        out[name] = unit(blocks[name])
+        out[f"has_{name}"] = (blocks[name] != 0).any(axis=1)  # a track with an all-zero vector has no direction to compare
+    return out
+
+
+def population(history: pl.DataFrame, track_ids: pl.Series, artist: np.ndarray, recent_days: int, short_days: int) -> dict:
+    """What the features need from everyone's listens, as of the last of them.
+
+    now           the time of the last listen
+    track         track_stats, in `track_ids` order
+    artist_users  how many users have played each artist, indexed by artist code
+    """
+    now = history["timestamp"].max()
+    pairs = first_and_last(history)
+    code = pl.DataFrame({"track_id": track_ids, "a": artist})
+    users = pairs.join(code, on="track_id").group_by("a").agg(n=pl.col("user_id").n_unique())
+    artist_users = np.zeros(int(artist.max()) + 1)
+    artist_users[users["a"].to_numpy()] = users["n"].to_numpy()
+    return {"now": now, "track": track_stats(pairs, track_ids, now, recent_days, short_days), "artist_users": artist_users}
 
 
 def build(
@@ -220,17 +257,27 @@ def build(
     album: np.ndarray,
     recent_days: int,
     short_days: int,
+    pop: dict | None = None,
+    side: dict | None = None,
 ) -> dict[str, np.ndarray]:
     """Every feature in FEATURES as a (users, N) array, for candidates `idx` with scores `tt_scores`.
 
     Row i of `idx` and `tt_scores` is user_ids[i]'s candidates, best first. Vectors,
     `blocks`, `artist` and `album` are in `user_ids` and `track_ids` order. The vectors
     must come from models that saw nothing after `history`; who made a track is a fixed fact.
+
+    `pop` is `population` of everyone's listens. Left out, it is computed from `history`,
+    which must then hold everyone's listens; given, `history` needs only those of `user_ids`.
+    `side` is `scaled` of `tt_track` and `blocks`, computed here if left out.
     """
-    now = history["timestamp"].max()
+    if pop is None:
+        pop = population(history, track_ids, artist, recent_days, short_days)
+    if side is None:
+        side = scaled(tt_track, blocks)
+    now = pop["now"]
     recent = now - timedelta(days=recent_days)
     pairs = first_and_last(history)
-    track = track_stats(pairs, track_ids, now, recent_days, short_days)
+    track = dict(pop["track"])
     pct = track.pop("track_pct")
     user = user_stats(history, pairs, user_ids, pl.DataFrame({"track_id": track_ids, "pct": pct}), now, recent_days)
 
@@ -248,12 +295,11 @@ def build(
 
     played = pair_matrix(pairs, user_ids, track_ids)
     played_recent = pair_matrix(pairs.filter(pl.col("last") > recent), user_ids, track_ids)
-    affinity = pair_scores(mean_direction(played_recent, tt_track), unit(tt_track), idx)
+    # unit(played @ side[...]) is mean_direction of the unscaled vectors
+    affinity = pair_scores(unit(played_recent @ side["tt"]), side["tt"], idx)
     out["recent_affinity"] = np.where(played_recent.getnnz(axis=1)[:, None] > 0, affinity, np.nan)
     for name in ("audio", "lyrics", "genres"):
-        block = blocks[name]
-        sim = pair_scores(mean_direction(played, block), unit(block), idx)
-        has = (block != 0).any(axis=1)  # a track with an all-zero vector has no direction to compare
-        out[f"sim_{name}"] = np.where(has[idx], sim, np.nan)
-    out |= artist_stats(history, pairs, user_ids, track_ids, idx, artist, album, now)
+        sim = pair_scores(unit(played @ side[name]), side[name], idx)
+        out[f"sim_{name}"] = np.where(side[f"has_{name}"][idx], sim, np.nan)
+    out |= artist_stats(history, pairs, user_ids, track_ids, idx, artist, album, pop["artist_users"], now)
     return {name: np.asarray(out[name], dtype=np.float32) for name in FEATURES}

@@ -33,8 +33,14 @@ small live demo. The owner is learning PyTorch through this project.
   NDCG@10 = 0.0368 (0.0348 without them, 0.0325 for `tt_id` alone, 0.0284 for ALS).
   `reports/bias.md` has the popularity-bias and genre-fairness measures and the
   popularity penalty; `python -m m4a_rec.demo` builds the demo page. The README is the
-  write-up. All six phases are done.
-- `pyproject.toml` lists only what the six phases use. Add a phase's libraries there when the
+  write-up.
+- Phase 7 (a local service: bundle, API, Docker, new-listener test): done, 2026-10-15.
+  Results are in `reports/serving.md`. Run for every known listener, the service gives
+  the saved `ranker_artist` top 10 for all of them. Listeners left out of tt_id and ALS,
+  served from their listens by fold-in, score test NDCG@10 = 0.0332 against 0.0351 with
+  learned vectors (interval on the gap -0.0055 to +0.0015). A request takes 21 ms
+  (known listener) or 56 ms (someone new). All seven phases are done.
+- `pyproject.toml` lists only what the seven phases use. Add a phase's libraries there when the
   phase starts.
 
 ## Data
@@ -60,6 +66,10 @@ Music4All-Onion, Zenodo record 6609677, CC BY 4.0. Listening events come from La
 | `data/processed/tracks.parquet` | one row per Music4All track: title, artist, album, year, language, genre labels and one broad `genre_group` |
 | `data/processed/models/tt_id_refit/neighbours.npy` | each track's 20 nearest tracks, as row numbers into `track_vecs.npy` |
 | `data/processed/demo/index.html` | the demo page. Holds titles and artists: never commit it |
+| `data/processed/models/als_refit/` | the ALS fit behind the `infer` snapshot, saved by `candidates`: vectors and IDs, settings in `meta.json` |
+| `data/processed/models/{tt_id,als}_newcomers/` | `tt_id` and ALS fitted on both train splits without the listeners in `tt_id_newcomers/held_out_users.npy` |
+| `data/processed/serving/` | the service's bundle: vectors, ranker, features, codes, population numbers, listens, titles. Holds titles: never commit it or build it into an image |
+| `data/processed/serving_newcomers/` | the same bundle without the held-out listeners, from the models fitted without them |
 
 - There are no likes, skips, or play durations. A row means "user played track at time".
 - Track titles, artists, and genre names are NOT in Onion. They come from the base
@@ -123,10 +133,18 @@ python -m m4a_rec.bias val           # bias and fairness measures on val; prints
 python -m m4a_rec.bias report        # the same on test; writes reports/bias.md
 python -m m4a_rec.index data/processed/models/tt_id_refit   # index and neighbours for the demo
 python -m m4a_rec.demo               # writes data/processed/demo/index.html
+python -m m4a_rec.newcomers          # tt_id and ALS without 10% of listeners, ~30 min
+python -m m4a_rec.bundle             # the service's bundle, seconds; `bundle newcomers` for the held-out version
+python -m m4a_rec.serve tune         # the fold-in weighting on val; prints
+python -m m4a_rec.serve report       # parity with the saved lists, new listeners, latency; writes reports/serving.md
+python -m m4a_rec.api                # the API on 127.0.0.1:8000; try it at /docs
+make docker-build && make docker-run # the same in a container that holds code only
 pytest -q
 pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 ```
 
+- `pip install -e ".[train,serve,dev]"` (or `make setup`) installs everything. `train` is
+  implicit, torch and faiss; the service and its image need only `serve`.
 - Run everything through the project venv. Without it activated, `python` and `pytest`
   can resolve to another environment and fail with `No module named 'm4a_rec'`; use
   `.venv/bin/python` and `.venv/bin/pytest` instead.
@@ -169,12 +187,24 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
   Both get held-out information only from `evaluate.breakdown` and `evaluate.hits`, which
   hand out lists, per-user scores and per-group totals, never the tracks a user went on
   to play (except `hits`, for the demo's marks).
+- The service (Phase 7) is three modules. `bundle.py` writes and reads the bundle and takes
+  listeners to the ranker's input, as `candidates.snapshot` does: learned vectors, or for
+  someone new vectors folded in from their listens, then candidates and every feature. It
+  imports no torch, xgboost or implicit, so `tests/test_bundle.py` compares it with
+  `candidates.snapshot` directly. `serve.py` adds the ranker, reasons and titles, and its
+  `report` command scores the service. `api.py` is the HTTP layer. `newcomers.py` fits the
+  models without the held-out listeners for the new-listener test.
+- `rank_features.build` takes `pop` (`population()`: what needs everyone's listens) and
+  `side` (`scaled()`: the track vectors at length 1). Left out, both are computed from
+  its arguments, as the snapshots do; the service computes them once. A new feature that
+  needs other users' listens goes in `population`.
 - Every module is pure functions plus a thin `main()`. The functions take frames, paths
   and plain arguments; only `main()` calls `load_config()` and touches `data/`. Tests call
   the functions on synthetic data built in `tests/conftest.py` and never read `data/`.
   New modules follow the same shape so they can be tested the same way.
 - `load_config()` merges every file under `configs/` (`data.yaml`, `eval.yaml`,
-  `baselines.yaml`, `twotower.yaml`, `ranker.yaml`, `metadata.yaml`, `bias.yaml`, `demo.yaml`) into one dict, so
+  `baselines.yaml`, `twotower.yaml`, `ranker.yaml`, `metadata.yaml`, `bias.yaml`,
+  `demo.yaml`, `serve.yaml`) into one dict, so
   top-level keys must not collide across config files. It turns `paths` into absolute
   `Path`s and creates those directories. A new config file has to be added to it.
 - Time ranges are half-open `(start, end]` everywhere: an event exactly on a boundary
@@ -204,9 +234,11 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 - XGBoost crashes the process if it is loaded after PyTorch, for the same reason.
   `src/m4a_rec/ranker.py` is the only module that imports `xgboost`; it must not import
   `torch` or any module that does (`retrieval`, `twotower`, `coldstart`, `candidates`), so
-  it reads other models' output from files. The same holds for `bias.py` and `demo.py`,
-  which import `ranker.py`. The tests of all three are in `tests/isolated/`, which
-  `pytest` skips and `tests/test_ranker.py` runs in a process of its own.
+  it reads other models' output from files. The same holds for `bias.py`, `demo.py`,
+  `serve.py` and `api.py`, which import `ranker.py`. Their tests are in `tests/isolated/`,
+  which `pytest` skips and `tests/test_ranker.py` runs in a process of its own.
+- `bundle.py`, `serve.py` and `api.py` must not import torch, faiss or implicit:
+  `tests/test_serving_imports.py` checks it, and the service's image installs none of them.
 - XGBoost needs the OpenMP library `libomp`. Here it finds Anaconda's copy, because the
   venv is built on Anaconda's Python; elsewhere it needs `brew install libomp`.
 - Use Polars, not pandas. Keep raw data out of git.
@@ -218,6 +250,9 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
   - `tracks.parquet` and the demo page stay under `data/`. The demo is never hosted.
   - When checking this data, print counts and shares, not records.
   - The README and the demo page carry the full citation.
+  - The API's responses carry titles. It listens on 127.0.0.1 only and is never hosted.
+    The Docker image holds code only; the bundle is mounted when it runs. Never push an
+    image with data in it. When checking the API, print track IDs and counts, not titles.
 - The owner wrote the two-tower forward passes and loss by hand in Phase 4
   (`src/m4a_rec/twotower.py`). Review that code and explain problems; do not rewrite it
   unasked.

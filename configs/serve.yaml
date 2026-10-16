@@ -1,0 +1,21 @@
+# Phase 7 service settings. Every number here is a decision; log changes in reports/decisions.md.
+
+serve:
+  # What `python -m m4a_rec.bundle` copies into data/processed/serving/. All three were fitted
+  # on both train splits, so the service picks up where the Phase 6 lists left off.
+  retrieval_model: tt_id_refit
+  als_model: als_refit       # saved by `candidates` for the infer snapshot
+  ranker: ranker_artist
+  fold_in: binary            # a new listener's two-tower vector: weights 1 (binary) or log(1 + plays); chosen on val NDCG@10 by `serve tune`
+  max_k: 100                 # most recommendations one request may ask for
+  reasons: 3                 # reasons per recommendation when asked to explain
+  host: 127.0.0.1            # local only: responses carry Music4All titles
+  port: 8000
+  batch_users: 2000          # users run at a time in `serve report`
+  latency_users: 200         # single requests timed in `serve report`
+  seed: 42
+
+# The new-listener test: these listeners are left out of every model and served from their history.
+newcomers:
+  fraction: 0.1
+  seed: 42

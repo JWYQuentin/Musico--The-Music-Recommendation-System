@@ -7,7 +7,8 @@ features for every candidate.
   train  history is retrieval_train; a candidate's label is 1 if the user plays it in ranker_train
   infer  history is both train splits; no labels, because the period after it is val and test
 
-Both are defined under `snapshots` in configs/ranker.yaml and built by the same code.
+Both are defined under `snapshots` in configs/ranker.yaml and built by the same code. A
+snapshot that names an `als_model` saves its ALS fit there, for the Phase 7 service.
 
 Usage: python -m m4a_rec.candidates     # writes data/processed/ranker/{train,infer}.parquet
 """
@@ -18,7 +19,7 @@ import sys
 import numpy as np
 import polars as pl
 
-from .baselines import als_vectors
+from .baselines import als_vectors, save_als
 from .config import load_config
 from .evaluate import PAIR
 from .features import load_blocks
@@ -85,6 +86,9 @@ def main() -> int:
         if not (same_users and same_tracks):
             raise ValueError(f"{model.name} was not trained on {snap['history']}")
         als_user, als_track = als_vectors(inter, iterations=b["als"]["iterations"], seed=b["seed"], **b["als"]["chosen"])
+        if "als_model" in snap:
+            settings = {"weighting": b["als"]["weighting"], "iterations": b["als"]["iterations"], "seed": b["seed"], **b["als"]["chosen"]}
+            save_als(processed / "models" / snap["als_model"], inter, als_user, als_track, settings)
         frame = snapshot(
             history,
             inter,
