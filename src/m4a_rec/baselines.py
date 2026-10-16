@@ -15,6 +15,7 @@ import json
 import sys
 import warnings
 from datetime import timedelta
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -98,6 +99,16 @@ def als_vectors(inter: Interactions, **settings) -> tuple[np.ndarray, np.ndarray
     """The fitted ALS user and track vectors. A user's score for a track is their dot product."""
     model = _fit_als(inter, **settings)
     return model.user_factors, model.item_factors
+
+
+def save_als(directory: Path, inter: Interactions, user_vecs: np.ndarray, track_vecs: np.ndarray, settings: dict) -> None:
+    """ALS vectors in the layout of a two-tower model's directory, with the settings that fitted them in meta.json."""
+    directory.mkdir(parents=True, exist_ok=True)
+    np.save(directory / "user_vecs.npy", user_vecs)
+    np.save(directory / "track_vecs.npy", track_vecs)
+    np.save(directory / "user_ids.npy", inter.user_ids.to_numpy())
+    np.save(directory / "track_ids.npy", np.array(inter.track_ids.to_list()))
+    (directory / "meta.json").write_text(json.dumps({"params": settings}, indent=2) + "\n")
 
 
 def fit_recommend(name: str, events: pl.DataFrame, cfg: dict, params: dict) -> pl.DataFrame:
