@@ -1,7 +1,7 @@
-.PHONY: setup download convert subsample audit phase1 split baselines-tune baselines features retrieval coldstart refit candidates ranker-tune ranker metadata bias-tune bias demo screenshots test
+.PHONY: setup download convert subsample audit phase1 split baselines-tune baselines features retrieval coldstart refit candidates ranker-tune ranker metadata bias-tune bias demo screenshots newcomers bundle serving serve docker-build docker-run test
 
 setup:
-	python -m venv .venv && .venv/bin/pip install -e ".[dev]"
+	python -m venv .venv && .venv/bin/pip install -e ".[train,serve,dev]"
 
 download:
 	python -m m4a_rec.download
@@ -71,6 +71,28 @@ DEMO = file://$(CURDIR)/data/processed/demo/index.html
 screenshots:
 	"$(CHROME)" --headless=new --hide-scrollbars --window-size=1440,1250 --screenshot=reports/figures/demo_listener.png "$(DEMO)#theme=light"
 	"$(CHROME)" --headless=new --hide-scrollbars --window-size=1440,820 --screenshot=reports/figures/demo_track.png "$(DEMO)#theme=light&t=first"
+
+# Phase 7: the service. `newcomers` trains for about 30 minutes.
+newcomers:
+	python -m m4a_rec.newcomers
+	python -m m4a_rec.bundle newcomers
+
+bundle:
+	python -m m4a_rec.bundle
+
+serving:
+	python -m m4a_rec.serve report
+
+serve:
+	python -m m4a_rec.api
+
+# The image holds code only. The bundle is mounted read-only, and the port is published on
+# this machine only: the responses carry Music4All titles.
+docker-build:
+	docker build -t m4a-rec .
+
+docker-run:
+	docker run --rm -p 127.0.0.1:8000:8000 -v $(CURDIR)/data/processed/serving:/app/data/processed/serving:ro m4a-rec
 
 test:
 	pytest -q

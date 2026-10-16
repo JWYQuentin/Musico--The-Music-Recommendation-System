@@ -811,3 +811,93 @@ Why accepted: the agreement expects publications that include data from the data
 and asks for the citation; a picture of some twenty titles is not the database.
 The owner looks at both pictures before they are committed. They can be remade with
 made-up tracks if the dataset's owners prefer.
+
+## Phase 7: a service others can run (2026-10-15)
+
+Numbers are in `reports/serving.md` unless they say otherwise.
+
+**The service runs on the owner's machine; nothing is deployed in public.**
+The API listens on 127.0.0.1. The Docker image holds code only, the bundle is mounted
+read-only when it starts, and `make docker-run` publishes the port on 127.0.0.1 only.
+Why: responses carry titles and artists from the Music4All database, which is shared for
+research only. Someone else can run the service with their own copy of both datasets.
+Rejected: a public API that returns track IDs only, which mean nothing without the
+dataset; a hosted version of the demo.
+
+**Someone new is served from the listens they hand in, by fold-in. Nothing is trained at request time.**
+- Two-tower: the direction of the weighted average of their tracks' vectors
+  (`rank_features.mean_direction`), with weights 1 or log(1 + plays), chosen on `val`.
+- ALS: the exact least-squares solve against the fitted track vectors, with confidence
+  alpha * log(1 + plays). This is the solve implicit's `recalculate_user` does; a test
+  checks the numpy version against it.
+
+Chosen: weights of 1 (`binary`). `serve tune` ran both weightings through both stages for
+the held-out listeners of the new-listener test, on `val`. The rule, fixed beforehand,
+picks on NDCG@10, as the ranker does. `binary` scores 0.0446 against 0.0436, and
+Recall@10 0.0380 against 0.0373; `log` is a little ahead at Recall@100 (0.1546 against
+0.1536). The gap is small either way.
+The weighting is stored in the bundle, so a change means rebuilding it.
+Why fold-in: the user tower is one learned vector per listener, so a newcomer has none.
+Both fold-ins take milliseconds and need no PyTorch.
+Rejected: a few gradient steps on a new user vector against the frozen track tower, which
+needs PyTorch in the service and a step size and count to tune.
+
+**The ranker's features are split into what needs everyone's listens and what needs one listener's.**
+`rank_features.population` computes the track numbers, how many users play each artist,
+and the moment of the last listen; `build` takes it. Before, `artist_listeners` counted
+the users handed to `build`, which equals everyone only when it is built for everyone, so
+it could not be run for one listener.
+Check: both snapshots, rebuilt after the change, are byte-identical to the ones the
+rankers were trained and scored on, and a test shows that a user built alone gets their
+rows of the full build.
+The service also computes `rank_features.scaled` once: the track vectors rescaled to
+length 1, which `build` otherwise redoes on every call and which were most of a
+request's time.
+
+**Retrieval in the service is a numpy dot product with every track, not the FAISS index.**
+`tracks.faiss` is an exact flat index, so the results are the same.
+Why: FAISS brings its own OpenMP runtime into a process that loads XGBoost.
+Cost: float32 products differ in their last bits from PyTorch's, and with how many rows
+go into one product. Near-ties among candidates can swap. `serving.md` counts how often
+the service's lists differ from the saved ones.
+
+**Three modules: `bundle` (up to the ranker's input), `serve` (the ranker), `api` (HTTP).**
+Why: `bundle` imports no torch, xgboost or implicit, so `tests/test_bundle.py` can compare
+its rows with `candidates.snapshot`, which needs torch, in the normal test process.
+`serve` and `api` import xgboost; their tests are in `tests/isolated/`.
+
+**The service reads one directory, the bundle, built from saved models.**
+It holds the two-tower and ALS vectors, the ranker, the content features, artist and
+album codes, the population numbers, the listens and titles.
+The infer snapshot's ALS fit is now saved by `candidates` (`models/als_refit/`) rather
+than refitted elsewhere. The rerun gave byte-identical snapshots, so the fit is
+reproducible.
+A listener's listens are read from the bundle per request: the file is sorted by user,
+in row groups of 100,000, so polars reads one group.
+Rejected: holding all 16 million listens in memory.
+
+**Requests: a listen's time is optional, and none may be after the data ends.**
+A listen without a time counts as played at the moment the data ends (2020-02-21 12:59:50
+for the full bundle). Times with a zone are converted to UTC, as the data's are. Track IDs
+not in the catalogue are left out and named in the response.
+Why: the features describe a listener as of that moment; a later listen is a time they
+cannot describe.
+
+**Dependencies are split into extras: `train` (implicit, torch, faiss-cpu), `serve` (fastapi, uvicorn), `dev` (pytest, httpx).**
+Why: the service needs none of the three training libraries. PyTorch is most of an
+install's size, and none of the three is then loaded next to XGBoost.
+`tests/test_serving_imports.py` checks that importing the API loads none of them.
+`make setup` installs all three extras.
+
+**The new-listener test leaves 10% of listeners out of every model.**
+1,435 listeners (seed 42) are dropped from both train splits before `tt_id` and ALS are
+fitted again, and from the population numbers. They are then served from their own
+train-split listens through the fold-in.
+Why: fold-in for listeners the models were trained on overstates what someone new gets,
+because the track vectors were learned with their listens. That number is reported
+beside the real one, not instead of it.
+Caveat: the ranker is the saved one, trained on a snapshot that held these listeners'
+earlier listens (labels from `ranker_train`, not `val` or `test`), so the result is a
+little optimistic.
+Rejected: also retraining the ranker without them, which would mean rebuilding both
+snapshots and the ranker for one row of a table.

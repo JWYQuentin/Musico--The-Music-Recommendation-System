@@ -15,7 +15,9 @@ from m4a_rec.rank_features import (
     mean_direction,
     pair_matrix,
     pair_scores,
+    population,
     rank_rows,
+    scaled,
     standardise_rows,
     track_stats,
     user_stats,
@@ -85,8 +87,12 @@ def test_user_stats_hand_checked():
     assert close(u["user_days_since_last"], [5, 0, 51])
 
 
-def build_tiny(hist):
-    """One candidate per user: user 1 is offered c, user 2 is offered b, user 3 is offered a."""
+def build_tiny(hist, rows=(0, 1, 2), pop=None, hand_in_scaled=False):
+    """One candidate per user: user 1 is offered c, user 2 is offered b, user 3 is offered a.
+
+    `rows` picks which of the three users to build for.
+    """
+    rows = list(rows)
     direction = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]])  # a and c alike, b different
     blocks = {
         "audio": direction,
@@ -95,18 +101,20 @@ def build_tiny(hist):
     }
     return build(
         hist,
-        USERS,
+        USERS.gather(rows),
         TRACKS,
-        idx=np.array([[2], [1], [0]]),
-        tt_scores=np.array([[0.5], [0.4], [0.3]]),
+        idx=np.array([[2], [1], [0]])[rows],
+        tt_scores=np.array([[0.5], [0.4], [0.3]])[rows],
         tt_track=direction,
-        als_user=np.array([[1.0], [2.0], [3.0]]),
+        als_user=np.array([[1.0], [2.0], [3.0]])[rows],
         als_track=np.array([[1.0], [1.0], [1.0]]),
         blocks=blocks,
         artist=np.array([0, 0, 1]),  # a and b are by one artist, c by another
         album=np.array([0, 0, 1]),  # and a and b are on one album
         recent_days=28,
         short_days=7,
+        pop=pop,
+        side=scaled(direction, blocks) if hand_in_scaled else None,
     )
 
 
@@ -154,3 +162,30 @@ def test_features_ignore_everything_after_the_history():
     assert all(np.array_equal(before[n], build_tiny(history())[n], equal_nan=True) for n in FEATURES)
     after = build_tiny(later)
     assert not np.array_equal(before["track_listeners"], after["track_listeners"])  # a now has three listeners
+
+
+def test_population_hand_checked():
+    pop = population(history(), TRACKS, np.array([0, 0, 1]), recent_days=28, short_days=7)
+    assert pop["now"] == NOW
+    assert pop["artist_users"].tolist() == [3, 1]  # a and b's artist: users 1, 2 and 3; c's artist: user 2
+    expected = track_stats(first_and_last(history()), TRACKS, NOW, recent_days=28, short_days=7)
+    assert all(close(pop["track"][name], values) for name, values in expected.items())
+
+
+def test_a_user_alone_gets_their_rows_of_the_full_build():
+    """The service builds one listener's features from their own listens and the population numbers."""
+    full = build_tiny(history())
+    pop = population(history(), TRACKS, np.array([0, 0, 1]), recent_days=28, short_days=7)
+    for row, user in enumerate(USERS):
+        alone = build_tiny(history().filter(pl.col("user_id") == user), rows=[row], pop=pop)
+        assert all(np.array_equal(alone[n], full[n][[row]], equal_nan=True) for n in FEATURES), user
+    # without the population numbers a user alone would be the only listener of everything
+    alone = build_tiny(history().filter(pl.col("user_id") == 3), rows=[2])
+    assert close(alone["artist_listeners"].ravel(), np.log1p([1])) and close(full["artist_listeners"][2], np.log1p([3]))
+
+
+def test_scaled_handed_in_gives_the_same_features():
+    by_itself, handed_in = build_tiny(history()), build_tiny(history(), hand_in_scaled=True)
+    assert all(np.array_equal(by_itself[n], handed_in[n], equal_nan=True) for n in FEATURES)
+    side = scaled(np.array([[3.0, 4.0], [0.0, 0.0]]), {name: np.array([[0.0, 2.0], [0.0, 0.0]]) for name in ("audio", "lyrics", "genres")})
+    assert close(side["tt"], [[0.6, 0.8], [0, 0]]) and side["has_audio"].tolist() == [True, False]
