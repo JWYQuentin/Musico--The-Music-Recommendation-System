@@ -129,6 +129,8 @@ nearest tracks from a FAISS index over the retrieval model's vectors.
 
 ![A track and its nearest tracks](reports/figures/demo_track.png)
 
+*The screenshots show an invented listener, tracks and artists, not data from Music4All.*
+
 The page is built locally and is not hosted: it contains titles and artists from the
 Music4All database, which is shared for research only. To build it:
 
