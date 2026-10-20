@@ -9,7 +9,7 @@ A two-stage recommender for a data-science portfolio: a two-tower retrieval mode
 (PyTorch) that picks a few hundred candidate tracks per user, then a gradient-boosted
 ranker (XGBoost, LambdaRank) that orders them. Benchmarked against popularity, item-kNN,
 and ALS on a temporal split, with a popularity-bias and genre-fairness analysis and a
-small live demo. The owner is learning PyTorch through this project.
+small live demo.
 
 ## Status
 - Phase 1 (setup and data audit): done on the real data, 2026-10-04. The answers to the
