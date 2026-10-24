@@ -804,13 +804,15 @@ coverage@10 from 39.1% to 41.8%, and costs 0.0007 of NDCG@10 (interval -0.0011 t
 It is reported as an option, not made the default: whether 2% of accuracy is worth four
 points of tail exposure is a product decision, not something this data can settle.
 
-**The README screenshots of the demo show a few track titles and artists.**
-They are the one place where content from Music4All is in the repository: two pictures
-with a listener's recent tracks and recommendations, beside the dataset's citation.
-Why accepted: the agreement expects publications that include data from the database
-and asks for the citation; a picture of some twenty titles is not the database.
-The owner looks at both pictures before they are committed. They can be remade with
-made-up tracks if the dataset's owners prefer.
+**The README screenshots of the demo show an invented listener, tracks and artists.**
+They were made by filling the demo template with made-up data, so nothing from Music4All
+is in the repository. `make screenshots` still photographs the real page, but writes the
+pictures beside it in `data/processed/demo/`, which git ignores.
+Why: the agreement allows research use only and the data is never to be shared. A
+picture of real titles in a public repository shares it, and git keeps it in every
+clone's history.
+Rejected: real screenshots beside the citation. That was the first version; on
+2026-10-19 it was replaced throughout the history.
 
 ## Phase 7: a service others can run (2026-10-15)
 
