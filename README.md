@@ -2,6 +2,10 @@
 
 By Zunhong (Quentin) Mei, M.S. in Data Science, Columbia University.
 
+**One line in the loss, subtracting each track's log-popularity, took the two-tower
+model from below item-kNN to above ALS; with a ranker on top, the full system beats
+ALS by 30% on NDCG@10.**
+
 A recommender built the way production systems are: a two-tower neural network
 (PyTorch) retrieves 1,000 candidate tracks for each listener, and a gradient-boosted
 ranker (XGBoost, LambdaRank) reorders the best 500 of them. It is trained on 13 months
@@ -65,7 +69,8 @@ flowchart LR
 
 - **The loss correction mattered most in retrieval.** Without correcting for popular
   tracks turning up as wrong answers, the two-tower model scored below item-kNN
-  (Recall@100 of 0.094 against 0.138 on `val`).
+  (Recall@100 of 0.094 against 0.106 on `val`). With it, the same model scored 0.138,
+  above ALS at 0.130.
 - **Content features help only where there is no listening.** For known tracks they add
   nothing. For tracks removed from training entirely, a content-only tower finds 28% of
   a listener's new tracks in its top 100, against 20% for comparing raw features and 4%
@@ -205,6 +210,24 @@ listening, so that a new listener's vector is learned rather than averaged from 
 tracks, and train the ranker with a loss that
 corrects for popularity instead of penalising it afterwards.
 
+## What you can reuse
+
+The code is under the MIT licence. Three parts stand on their own:
+
+- **A popularity-corrected in-batch softmax loss.** `in_batch_softmax_loss` in
+  [`src/m4a_rec/twotower.py`](src/m4a_rec/twotower.py) needs only PyTorch. It
+  subtracts the log of each track's share of the training pairs from its scores, and
+  can ignore a wrong answer that is the same track as the right one.
+- **A paired bootstrap for comparing two models.** `paired_difference` in
+  [`src/m4a_rec/evaluate.py`](src/m4a_rec/evaluate.py) takes per-user scores for two
+  models and returns the mean difference with a 95% interval, resampling users and
+  keeping each user's two scores together.
+- **A leakage test.** [`tests/test_leakage.py`](tests/test_leakage.py) fails if a
+  module outside an allowlist names a held-out file, and checks on a tiny example that
+  a period's history stops where the period starts. The first check is a text search,
+  so it catches mistakes rather than deliberate workarounds; to reuse it, change the
+  file names and the allowlist.
+
 ## Reproduce it
 
 ```bash
@@ -213,9 +236,31 @@ pip install -e ".[train,serve,dev]"   # the service alone needs only ".[serve]"
 pytest -q                             # 117 tests, a few seconds
 ```
 
-Music4All-Onion downloads itself (about 3 GB). The base Music4All dataset, needed from
-`metadata` onwards, has to be requested from its authors and unpacked to
-`data/raw/music4all/`. On macOS, XGBoost needs `brew install libomp` if it is not found.
+The tests use synthetic data, so they need no download.
+
+### On the free data alone
+
+Everything before the ranker runs on Music4All-Onion, which is open (CC BY 4.0) and
+downloads itself, about 3 GB. Nothing has to be requested:
+
+```bash
+make phase1 split baselines features retrieval coldstart
+```
+
+These are the first four steps in the table below, with the settings already chosen in
+`configs/`, so no tuning is repeated. They write `reports/audit.md`,
+`reports/baselines.md`, `reports/retrieval.md` and `reports/coldstart.md`: the
+baselines and the two-tower models fitted on `retrieval_train` alone, where `tt_id`
+beats ALS on `test` (Recall@100 of 0.139 against 0.130), and the cold-start test. The
+table at the top needs the ranker, and the ranker needs the base dataset. Training uses
+the Apple GPU when PyTorch can, otherwise the CPU; on an NVIDIA GPU, set `device: cuda`
+in `configs/twotower.yaml`.
+
+### The full pipeline
+
+The base Music4All dataset, needed from `metadata` onwards, has to be requested from its
+authors and unpacked to `data/raw/music4all/`. On macOS, XGBoost needs
+`brew install libomp` if it is not found.
 
 | Step | Commands | Writes |
 |---|---|---|
