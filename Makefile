@@ -64,13 +64,14 @@ demo:
 	python -m m4a_rec.index data/processed/models/tt_id_refit
 	python -m m4a_rec.demo
 
-# Pictures of the demo for the README, taken with headless Chrome in the light theme.
-# They show a few track titles from Music4All: look at them before committing.
+# Pictures of the demo, taken with headless Chrome in the light theme. They show titles
+# and artists from Music4All, so they stay beside the page in data/, which git ignores.
+# The README's pictures are of an invented listener instead.
 CHROME ?= /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 DEMO = file://$(CURDIR)/data/processed/demo/index.html
 screenshots:
-	"$(CHROME)" --headless=new --hide-scrollbars --window-size=1440,1250 --screenshot=reports/figures/demo_listener.png "$(DEMO)#theme=light"
-	"$(CHROME)" --headless=new --hide-scrollbars --window-size=1440,820 --screenshot=reports/figures/demo_track.png "$(DEMO)#theme=light&t=first"
+	"$(CHROME)" --headless=new --hide-scrollbars --window-size=1440,1250 --screenshot=data/processed/demo/demo_listener.png "$(DEMO)#theme=light"
+	"$(CHROME)" --headless=new --hide-scrollbars --window-size=1440,820 --screenshot=data/processed/demo/demo_track.png "$(DEMO)#theme=light&t=first"
 
 # Phase 7: the service. `newcomers` trains for about 30 minutes.
 newcomers:
