@@ -1,0 +1,16 @@
+name: Question
+description: Ask about the method, the results or how to run something.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        `reports/decisions.md` records every design choice with its reason and what was rejected; your answer may already be there.
+
+        **Please keep Music4All data out of this issue.** Titles, artists, albums and lyrics come from a database shared for research only. Track IDs and counts are fine.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true

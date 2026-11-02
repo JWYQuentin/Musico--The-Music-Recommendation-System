@@ -1,4 +1,8 @@
-# Two-stage music recommender on Music4All-Onion
+# Musico: a two-stage music recommender on Music4All-Onion
+
+[![tests](https://github.com/JWYQuentin/Musico--The-Music-Recommendation-System/actions/workflows/tests.yml/badge.svg)](https://github.com/JWYQuentin/Musico--The-Music-Recommendation-System/actions/workflows/tests.yml)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 By Zunhong (Quentin) Mei, M.S. in Data Science, Columbia University.
 

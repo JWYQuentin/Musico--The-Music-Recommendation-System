@@ -1,0 +1,66 @@
+cff-version: 1.2.0
+message: >-
+  If you use this code, please cite it as below. If you use its results or data,
+  please also cite the two datasets listed under references.
+title: "Musico: a two-stage music recommender on Music4All-Onion"
+type: software
+authors:
+  - given-names: Zunhong
+    family-names: Mei
+repository-code: "https://github.com/JWYQuentin/Musico--The-Music-Recommendation-System"
+license: MIT
+abstract: >-
+  A two-tower retrieval model (PyTorch) followed by a gradient-boosted LambdaRank
+  ranker (XGBoost), trained on 17.5 million Last.fm listens from Music4All-Onion,
+  scored on a split by time against popularity, item-kNN and ALS, with a
+  popularity-bias and genre-fairness analysis and a local recommendation API.
+keywords:
+  - recommender systems
+  - music recommendation
+  - two-tower retrieval
+  - learning to rank
+  - popularity bias
+references:
+  - type: conference-paper
+    title: "Music4All-Onion: A Large-Scale Multi-faceted Content-Centric Music Recommendation Dataset"
+    authors:
+      - given-names: Marta
+        family-names: Moscati
+      - given-names: Emilia
+        family-names: Parada-Cabaleiro
+      - given-names: Yashar
+        family-names: Deldjoo
+      - given-names: Eva
+        family-names: Zangerle
+      - given-names: Markus
+        family-names: Schedl
+    collection-title: "Proceedings of the 31st ACM International Conference on Information and Knowledge Management (CIKM 2022)"
+    year: 2022
+  - type: conference-paper
+    title: "Music4All: A New Music Database and its Applications"
+    authors:
+      - given-names: Igor André Pegoraro
+        family-names: Santana
+      - given-names: Fabio
+        family-names: Pinhelli
+      - given-names: Juliano
+        family-names: Donini
+      - given-names: Leonardo
+        family-names: Catharin
+      - given-names: Rafael Biazus
+        family-names: Mangolin
+      - given-names: Yandre Maldonado e Gomes
+        name-particle: da
+        family-names: Costa
+      - given-names: Valéria Delisandra
+        family-names: Feltrim
+      - given-names: Marcos Aurélio
+        family-names: Domingues
+    collection-title: "27th International Conference on Systems, Signals and Image Processing (IWSSIP 2020)"
+    conference:
+      name: IWSSIP 2020
+      city: Niterói
+      country: BR
+    start: 399
+    end: 404
+    year: 2020

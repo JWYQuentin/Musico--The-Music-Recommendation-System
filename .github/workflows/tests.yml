@@ -1,0 +1,32 @@
+# Runs the test suite on every push to main and every pull request. The tests use
+# synthetic data, so nothing is downloaded and no Music4All data is involved.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"  # the Docker image's version
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # PyTorch's CPU build first: the default Linux wheel brings several GB of CUDA
+      # libraries that no test uses. The project's `torch>=2.4` is then already met.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[train,serve,dev]"
+      - name: Test
+        run: pytest -q
