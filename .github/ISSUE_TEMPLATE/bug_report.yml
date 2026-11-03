@@ -1,0 +1,33 @@
+name: Bug report
+description: Something in the code, the tests or the README is wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Please keep Music4All data out of this issue.** Issues are public, and titles, artists, albums and lyrics come from the Music4All database, which is shared for research only. The demo page and the API's responses contain them. Track IDs, user IDs and counts are fine.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and what it printed. Cut any lines that show titles or artists.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: step
+    attributes:
+      label: Which step
+      description: For example `pytest`, `retrieval report`, `ranker fit ranker_artist` or `api`.
+  - type: textarea
+    id: setup
+    attributes:
+      label: Your setup
+      description: Operating system, Python version, and whether you have the base Music4All dataset or only Music4All-Onion.
+      render: text

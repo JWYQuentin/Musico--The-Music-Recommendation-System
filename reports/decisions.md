@@ -903,3 +903,27 @@ earlier listens (labels from `ranker_train`, not `val` or `test`), so the result
 little optimistic.
 Rejected: also retraining the ranker without them, which would mean rebuilding both
 snapshots and the ranker for one row of a table.
+
+## Repository upkeep (2026-11-02)
+
+**Tests run on GitHub Actions: Ubuntu, Python 3.12, CPU-only PyTorch, on every push to
+`main` and every pull request.**
+Why: a visitor sees the suite pass without running it, and a change that breaks the
+suite shows before it is merged. 3.12 is the Docker image's version. PyTorch comes from
+its CPU index because the default Linux wheel adds several GB of CUDA libraries that no
+test uses. The tests build their data in `tests/conftest.py`, so the workflow downloads
+nothing and never touches Music4All.
+Rejected: a matrix over Python versions, which multiplies the run time for no supported
+target; a macOS runner, which would exercise the OpenMP isolation rules where they
+matter but needs `libomp` set up and runs several times slower. On Linux,
+`tests/test_serving_imports.py` still checks that the API, and with it `ranker.py`,
+loads no PyTorch or FAISS.
+
+**Issue and pull-request templates say to keep Music4All data out.**
+Why: issues are public, and the demo page and the API's responses carry titles and
+artists. The pull-request checklist repeats the rules above: tests, a decisions entry,
+generated reports, no Music4All data.
+
+**`CITATION.cff` lists both datasets as references.**
+Why: GitHub turns it into a "Cite this repository" button, and the Music4All agreement
+asks for its paper to be cited wherever results are published.
