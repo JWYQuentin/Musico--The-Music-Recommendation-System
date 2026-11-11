@@ -958,3 +958,43 @@ it would change both snapshots, the ranker, the bundle and every reported number
 Rejected: building it anyway to close that gap; dropping the idea without a report, which
 would leave the README's own next step untested on paper.
 `test` was not read for this.
+
+**The listens curve cuts a held-out listener's history to their N most recent distinct tracks.**
+Numbers are in `reports/listens_curve.md` (`python -m m4a_rec.serve curve`).
+What: the latest stretch of a listener's train-split listening that holds N distinct
+tracks, repeats included, for N = 1, 2, 3, 5, 10, 20, 50, 100, 200, then everything. A
+listener with fewer than N tracks is served from all of them (93% have at least 50, 80%
+at least 100, 61% at least 200).
+Why recent: the window's first listens are not a listener's first ever, and recent
+listens are what a service holds for someone who has just joined. Why tracks: the
+two-tower fold-in counts each track once, and a questionnaire would hand over tracks.
+Rejected: the first N listens of the window; the last N plays, which for a listener who
+repeats an album is one or two tracks.
+
+**The curve uses the models fitted without these listeners and tunes nothing, so `val` and `test` come from one run.**
+The fold-in stays `binary` and the ranker is the saved one, as in the new-listener test,
+whose caveat carries over: the ranker's training snapshot held these listeners' earlier
+listens. The "all" row is that test's "fold-in, never seen" row and the 0 row its
+popularity row; both match `reports/serving.md`.
+
+**The evaluator's already-played rule is kept, and the report says what it hides.**
+A list is scored after dropping every track the listener has played, including plays
+the service was not shown. With 1 to 50 tracks shown, 30% to 40% of a first 10 are such
+tracks, so a real service would spend those places on music the listener knows. They are
+neither hits nor misses here.
+Why keep the rule: relevance means a first play everywhere else in the project, and
+counting a known favourite as a miss would punish the service for being right.
+Rejected: a second relevance rule for this one report.
+
+**What the curve shows (`test`, 1,014 listeners, NDCG@10 of both stages).**
+One track gives 0.0157, against 0.0063 for the most popular tracks and 0.0332 for the
+whole history (median 270 tracks). Ten give 0.0266 and fifty 0.0309. From fifty on,
+every interval against the whole history includes zero (at fifty: -0.0022, -0.0074 to
++0.0031); at twenty it does not. Recall@100 keeps rising to the end (0.127 at 50, 0.155 for all).
+On `val`, the two weeks straight after the listens, 20 tracks already match the whole
+history (0.0435 against 0.0446); on `test`, two weeks later, they do not (0.0262). A
+short recent history describes what a listener wants now and dates quickly.
+For retrieval alone, 100 recent tracks beat the whole history on both splits (`test`
+0.0308 against 0.0269): the fold-in averages every track a listener ever played with
+equal weight. Not acted on here; weighting recent tracks would be a choice for
+`serve tune` on `val`.

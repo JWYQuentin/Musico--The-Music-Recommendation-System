@@ -182,6 +182,17 @@ in the reply.
   in the list the gap is real: Recall@500 is 0.30 against 0.36. The ranker matters more
   for them, lifting NDCG@10 from 0.0269 for retrieval alone. It had seen their earlier
   listens in training, so this is slightly optimistic.
+- **A few listens go a long way, and about 50 tracks are enough for the top 10.** Served
+  from only their most recent track, the same listeners score NDCG@10 = 0.0157 on
+  `test`: two and a half times the most popular tracks, and about half of what their
+  whole history gives (0.0332, a median of 270 tracks). Ten tracks give 0.0266. At 50
+  the gap to the whole history is within noise (−0.0022, interval −0.0074 to +0.0031).
+  Recall@100 keeps climbing with more history. With these short histories, 30% to 40%
+  of a top 10 is music the listener already knew from listens the service was not
+  shown; those tracks are dropped before scoring, as everywhere else here
+  ([`reports/listens_curve.md`](reports/listens_curve.md)).
+
+  ![NDCG@10 by how much a new listener has played](reports/figures/listens_curve.png)
 - **Fast:** a median of 21 ms per request for a known listener and 56 ms for someone new,
   on an Apple-silicon Mac with 10 cores.
 
@@ -278,7 +289,7 @@ authors and unpacked to `data/raw/music4all/`. On macOS, XGBoost needs
 | Ranker | `python -m m4a_rec.metadata`, `candidates`, `ranker tune ranker_artist`, `ranker fit ranker`, `ranker fit ranker_artist`, `ranker report` | `reports/ranker.md` |
 | Bias and fairness | `python -m m4a_rec.bias tune`, `bias report` | `reports/bias.md` |
 | Demo | `python -m m4a_rec.index data/processed/models/tt_id_refit`, `demo` | the demo page |
-| Service | `python -m m4a_rec.newcomers`, `bundle newcomers`, `bundle`, `serve report` | `reports/serving.md`, the bundle the API serves |
+| Service | `python -m m4a_rec.newcomers`, `bundle newcomers`, `bundle`, `serve report`, `serve curve` | `reports/serving.md`, `reports/listens_curve.md`, the bundle the API serves |
 
 The `Makefile` wraps these. The window is cut by time into four parts:
 

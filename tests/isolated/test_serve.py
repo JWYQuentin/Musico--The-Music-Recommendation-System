@@ -1,5 +1,5 @@
 """Tests for serve.py. It imports ranker.py, so they run in their own process: see tests/test_ranker.py."""
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import numpy as np
 import polars as pl
@@ -7,7 +7,7 @@ import pytest
 
 from m4a_rec import bundle
 from m4a_rec.rank_features import unit
-from m4a_rec.serve import NEW, for_history, for_user, lists_for, recommend, same_top, similar
+from m4a_rec.serve import NEW, curve_figure, for_history, for_user, known_share, lists_for, recent, recommend, render_curve, same_top, similar
 
 
 def plays_of(s, user):
@@ -102,3 +102,49 @@ def test_same_top_hand_checked():
     b = pl.DataFrame({"user_id": [1, 1, 2, 2], "track_id": ["x", "y", "y", "x"], "score": [2.0, 1.0, 2.0, 1.0]})
     assert same_top(a, b, 2) == 0.5  # user 1's first two agree; user 2's are the same tracks in the other order
     assert same_top(a, b, 1) == 0.5
+
+
+def test_recent_hand_checked():
+    at = lambda *seconds: [datetime(2020, 1, 1, 0, 0, sec) for sec in seconds]  # noqa: E731
+    history = pl.DataFrame(
+        {
+            # user 1 plays a, b, a, c, b: most recently played first, that is b (5), c (4), a (3)
+            "user_id": [1, 1, 1, 1, 1, 2, 2],
+            "track_id": ["a", "b", "a", "c", "b", "x", "y"],
+            "timestamp": at(1, 2, 3, 4, 5, 1, 2),
+        }
+    )
+    kept = lambda n, user: recent(history, n).filter(pl.col("user_id") == user).select("track_id", "timestamp").rows()  # noqa: E731
+    assert kept(1, 1) == [("b", at(5)[0])]  # after c's last play
+    assert kept(2, 1) == [("c", at(4)[0]), ("b", at(5)[0])]  # after a's last play: b's earlier play is not part of the stretch
+    assert kept(3, 1) == history.filter(pl.col("user_id") == 1).select("track_id", "timestamp").rows() == kept(9, 1)
+    assert kept(1, 2) == [("y", at(2)[0])] and len(kept(2, 2)) == 2  # each user is cut on their own
+    assert recent(history, 2).schema == history.schema
+
+
+def test_known_share_hand_checked():
+    lists = pl.DataFrame(
+        {"user_id": [1, 1, 1, 2, 2, 2], "track_id": ["a", "b", "c", "a", "b", "c"], "score": [3.0, 2.0, 1.0, 1.0, 2.0, 3.0]}
+    )
+    history = pl.DataFrame({"user_id": [1, 1, 2, 2], "track_id": ["a", "a", "a", "c"]})
+    assert known_share(lists, history, 1) == 1.0  # user 1's first is a, user 2's is c: both played
+    assert known_share(lists, history, 2) == 0.5  # then b for each, which neither has played
+    assert known_share(lists, history, 3) == 0.5  # 3 of 6: user 2's a is their third
+
+
+def test_curve_report_and_figure_render(tmp_path):
+    m = lambda v: {"ndcg@10": v, "recall@10": 0.02, "recall@100": 0.1, "recall@500": 0.3}  # noqa: E731
+    gap = lambda d: {name: {"diff": d, "low": d - 0.004, "high": d + 0.004} for name in m(0)}  # noqa: E731
+    row = lambda tracks, both, known, d: {  # noqa: E731
+        "tracks": float(tracks), "known": known, "retrieval": {"test": m(both - 0.005)}, "both": {"test": m(both)}, "gap": {"test": gap(d)}
+    }
+    curve = {"1": row(1, 0.02, 0.4, -0.013), "20": row(20, 0.031, 0.25, -0.002), "all": row(270, 0.033, 0.0, 0.0)}
+    floor = {"test": m(0.006)}
+    md = render_curve(curve, floor, {"held_out": 1435, "test": 1014}, {"fold_in": "binary", "ranker": "ranker_artist", "n_boot": 2000}, [10, 20, 100, 500])
+    assert "python -m m4a_rec.serve curve" in md and "## test (1,014 held-out listeners with a track to find)" in md
+    assert "| Tracks shown | Median tracks | ndcg@10, retrieval alone | ndcg@10 | recall@10 | recall@100 | Against all | Already played |" in md
+    assert "| 0 | 0 |  | 0.0060 | 0.0200 | 0.1000 |  |  |" in md  # the most popular tracks
+    assert "| 1 | 1 | 0.0150 | 0.0200 | 0.0200 | 0.1000 | -0.0130 (-0.0170 to -0.0090) | 40.0% |" in md
+    assert "| all | 270 | 0.0280 | 0.0330 | 0.0200 | 0.1000 |  | 0.0% |" in md
+    curve_figure(curve, floor, "test", "ndcg@10", tmp_path / "curve.png")
+    assert (tmp_path / "curve.png").stat().st_size > 0

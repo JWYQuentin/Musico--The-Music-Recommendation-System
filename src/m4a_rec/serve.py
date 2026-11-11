@@ -13,8 +13,10 @@ that needs faiss or implicit either, so the service's image needs none of the th
           new-listener test held out, on val. Prints; writes nothing.
   report  the service for every known listener against the saved Phase 6 lists, the
           new-listener test, and how long a request takes. Writes reports/serving.md.
+  curve   the new-listener test again with each held-out listener served from only
+          their most recent tracks. Writes reports/listens_curve.md and its figure.
 
-Usage: python -m m4a_rec.serve tune | report
+Usage: python -m m4a_rec.serve tune | report | curve
 """
 from __future__ import annotations
 
@@ -25,11 +27,16 @@ from pathlib import Path
 from time import perf_counter
 from typing import NamedTuple
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
 import xgboost as xgb
 
 from . import bundle
+from .audit import BLUE, GRID, INK, MUTED, SURFACE
 from .config import load_config
 from .demo import reasons
 from .evaluate import PAIR, TRAIN, breakdown, paired_difference, score
@@ -196,6 +203,112 @@ def same_top(a: pl.DataFrame, b: pl.DataFrame, k: int) -> float:
     return float((together["track_id"] == together["track_id_b"]).fill_null(False).mean())
 
 
+def recent(history: pl.DataFrame, n: int) -> pl.DataFrame:
+    """Each user's latest stretch of listening that holds `n` distinct tracks, repeats included.
+
+    These are their listens after the last play of their (n+1)-th most recently played
+    track. A user with n tracks or fewer keeps every listen. Where that track and the
+    one after it were last played in the same second, the user is left with fewer than n.
+    """
+    last = history.group_by(PAIR).agg(last=pl.col("timestamp").max()).sort(["user_id", "last", "track_id"], descending=[False, True, False])
+    cut = last.with_columns(place=pl.int_range(1, pl.len() + 1).over("user_id")).filter(pl.col("place") == n + 1).select("user_id", cut="last")
+    kept = history.join(cut, on="user_id", how="left", maintain_order="left")
+    return kept.filter(pl.col("cut").is_null() | (pl.col("timestamp") > pl.col("cut"))).drop("cut")
+
+
+def known_share(lists: pl.DataFrame, history: pl.DataFrame, k: int) -> float:
+    """Share of the first k tracks of every list, taken together, that the list's user plays in `history`."""
+    first = lists.sort(["user_id", "score"], descending=[False, True]).group_by("user_id", maintain_order=True).head(k)
+    return first.join(history.select(PAIR).unique(), on=PAIR, how="semi").height / first.height
+
+
+def curve_figure(curve: dict, floor: dict, split: str, metric: str, path: Path) -> None:
+    """`metric` on `split` against the number of recent tracks shown: both stages, retrieval alone, and the most popular tracks."""
+    names = list(curve)
+    x = range(len(names))
+    fig, ax = plt.subplots(figsize=(6.4, 3.6))
+    fig.patch.set_facecolor(SURFACE)
+    ax.set_facecolor(SURFACE)
+    ax.axhline(floor[split][metric], color=MUTED, linewidth=1, linestyle=(0, (4, 3)))
+    ax.text(len(names) - 1, floor[split][metric], "most popular tracks (no listens)", ha="right", va="bottom", fontsize=8, color=MUTED)
+    for stages, label, colour in (("retrieval", "retrieval alone", "#c3c2b7"), ("both", "retrieval + ranker", BLUE)):
+        values = [curve[name][stages][split][metric] for name in names]
+        ax.plot(x, values, color=colour, linewidth=2, marker="o", markersize=4)
+        ax.text(len(names) - 1 + 0.15, values[-1], label, va="center", fontsize=8, color=INK if stages == "both" else MUTED)
+    ax.set_title(f"{metric.upper().replace('@', ' at ')} on {split} by how much a new listener has played", loc="left", fontsize=11, color=INK, pad=10)
+    ax.set_xlabel("most recent tracks the service is shown", fontsize=9, color=MUTED)
+    ax.set_xticks(list(x), names)
+    ax.set_xlim(-0.3, len(names) + 1.6)
+    ax.set_ylim(0, None)
+    ax.grid(True, axis="y", color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.tick_params(which="both", colors=MUTED, labelsize=9, length=0)
+    for side in ("top", "right", "left"):
+        ax.spines[side].set_visible(False)
+    ax.spines["bottom"].set_color(GRID)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def render_curve(curve: dict, floor: dict, users: dict, info: dict, ks: list[int]) -> str:
+    """The listens-curve report.
+
+    curve   tracks shown ("1", ..., "all") -> {tracks, known, retrieval: {split: metrics},
+            both: {split: metrics}, gap: {split: {metric: {diff, low, high}}}}; `tracks` is the
+            median number of distinct tracks a listener was served from, `gap` both stages
+            minus the "all" row's
+    floor   {split: metrics} for the most popular tracks
+    users   {held_out, <split>: listeners scored}
+    """
+    main, r10, r100 = f"ndcg@{ks[0]}", f"recall@{ks[0]}", f"recall@{ks[2]}"
+    L = [
+        "# How many listens a new listener needs",
+        "",
+        "Generated by `python -m m4a_rec.serve curve`. Do not edit by hand; rerun instead.",
+        "",
+        f"The {users['held_out']:,} listeners of the new-listener test (`reports/serving.md`) were left out of tt_id,",
+        "ALS and the population numbers. Here each is served from only their most recent tracks:",
+        "the latest stretch of their train-split listening that holds N distinct tracks, repeats",
+        "included. A listener with fewer than N tracks is served from all of them. The fold-in",
+        f"({info['fold_in']}) and the ranker (`{info['ranker']}`) are the saved ones; nothing was tuned on these numbers.",
+        "",
+        "- 0: the most popular tracks, what a service can give with nothing to go on",
+        "- all: their whole history, the \"fold-in, never seen\" rows of `reports/serving.md`",
+        "",
+        "Two things to keep in mind. A list is scored after the tracks the listener has already",
+        "played are dropped, including plays the service was not shown here. `Already played` is",
+        f"the share of the first {ks[0]} tracks, before that, that the listener had played: places the",
+        "service would have spent on tracks they know. And the ranker was trained on a snapshot",
+        "that held these listeners' earlier listens, so its columns are a little optimistic.",
+        "",
+        f"`Against all` is {main} of both stages minus the \"all\" row's, with a 95% interval from",
+        f"resampling the held-out listeners {info['n_boot']:,} times.",
+        "",
+    ]
+    for split in floor:
+        L += [f"## {split} ({users[split]:,} held-out listeners with a track to find)", ""]
+        rows = [[0, 0, "", floor[split][main], floor[split][r10], floor[split][r100], "", ""]]
+        for name, row in curve.items():
+            g = row["gap"][split][main]
+            rows.append(
+                [
+                    name,
+                    int(row["tracks"]),
+                    row["retrieval"][split][main],
+                    row["both"][split][main],
+                    row["both"][split][r10],
+                    row["both"][split][r100],
+                    "" if name == "all" else f"{g['diff']:+.4f} ({g['low']:+.4f} to {g['high']:+.4f})",
+                    f"{row['known']:.1%}",
+                ]
+            )
+        L += table(
+            ["Tracks shown", "Median tracks", f"{main}, retrieval alone", main, r10, r100, "Against all", "Already played"], rows
+        )
+    return "\n".join(L)
+
+
 def timed(s: Service, users: list[int], history: pl.DataFrame, k: int) -> dict:
     """Seconds per stage of single requests, as the API makes them: each user as a known listener, then their listens as someone new's."""
     known, new = [], []
@@ -293,7 +406,7 @@ def render(parity: dict, newcomers: dict, gaps: dict, latency: dict, info: dict,
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if argv not in (["tune"], ["report"]):
+    if argv not in (["tune"], ["report"], ["curve"]):
         print(__doc__)
         return 2
     cfg = load_config()
@@ -312,6 +425,37 @@ def main(argv: list[str] | None = None) -> int:
             say(f"fold-in {fold_in}")
             rows.append([fold_in, *mean(per_user(lists_for(new, theirs, held, fold_in, c["batch_users"]), "val", held, ks[0])).values()])
         say("\n".join(table(["fold-in", *metrics], rows)))
+        return 0
+
+    if argv == ["curve"]:
+        boot, splits, fold_in = cfg["bootstrap"], ("val", "test"), new.bundle.meta["fold_in"]
+        scored = {}
+        for name, listens in {**{str(k): recent(theirs, k) for k in n["listens"]}, "all": theirs}.items():
+            say(f"{name} tracks")
+            lists = {stages: lists_for(new, listens, held, fold_in, c["batch_users"], stages) for stages in ("retrieval", "both")}
+            scored[name] = {
+                "tracks": listens.group_by("user_id").agg(pl.col("track_id").n_unique())["track_id"].median(),
+                "known": known_share(lists["both"], theirs, ks[0]),
+                **{stages: {split: per_user(recs, split, held, ks[0]) for split in splits} for stages, recs in lists.items()},
+            }
+        full = scored["all"]["both"]
+        curve = {
+            name: {
+                "tracks": row["tracks"],
+                "known": row["known"],
+                **{stages: {split: mean(row[stages][split]) for split in splits} for stages in ("retrieval", "both")},
+                "gap": {split: paired_difference(row["both"][split], full[split], metrics, boot["n"], boot["seed"]) for split in splits},
+            }
+            for name, row in scored.items()
+        }
+        popular = pl.read_parquet(processed / "recs" / "popularity.parquet").filter(pl.col("user_id").is_in(held))
+        floor = {split: mean(per_user(popular, split, held, ks[0])) for split in splits}
+        users = {"held_out": len(held), **{split: full[split].height for split in splits}}
+        info = {"fold_in": fold_in, "ranker": c["ranker"], "n_boot": boot["n"]}
+        curve_figure(curve, floor, "test", metrics[0], reports / "figures" / "listens_curve.png")
+        (reports / "listens_curve.json").write_text(stable_json({"users": users, "popularity": floor, "curve": curve}))
+        (reports / "listens_curve.md").write_text(render_curve(curve, floor, users, info, ks))
+        say(f"wrote {reports / 'listens_curve.md'}")
         return 0
 
     s = load(processed / "serving")
