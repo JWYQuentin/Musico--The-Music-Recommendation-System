@@ -202,17 +202,19 @@ from the Music4All database, which is shared for research only. Full numbers are
   were about twice what `test` confirmed, which is why every claim above is a `test`
   number with an interval.
 - **The ranker can only reorder what retrieval finds.** A listener's top 500 candidates
-  hold about a third of what they go on to discover.
+  hold about a third of what they go on to discover. A wider pool is not the fix,
+  though: on `val`, reordering 1,000 candidates, or swapping in more tracks by artists
+  the listener already plays, left NDCG@10 where it was
+  ([`reports/ranker_artist_pools.md`](reports/ranker_artist_pools.md)).
 - **Genre groups come from keyword rules** on each track's first-listed label, and some
   calls are debatable. Small groups have wide intervals.
 - **Bias is measured against what listeners went on to play**, which was itself shaped
   by whatever was recommending music to them at the time.
 
-What I would do next: add unplayed tracks by a listener's artists as a second source of
-candidates, replace the one-vector-per-listener tower with one that reads recent
-listening, so that a new listener's vector is learned rather than averaged from their
-tracks, and train the ranker with a loss that
-corrects for popularity instead of penalising it afterwards.
+What I would do next: replace the one-vector-per-listener tower with one that reads
+recent listening, so that a new listener's vector is learned rather than averaged from
+their tracks, and train the ranker with a loss that corrects for popularity instead of
+penalising it afterwards.
 
 ## What you can reuse
 

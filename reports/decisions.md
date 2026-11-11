@@ -927,3 +927,34 @@ generated reports, no Music4All data.
 **`CITATION.cff` lists both datasets as references.**
 Why: GitHub turns it into a "Cite this repository" button, and the Music4All agreement
 asks for its paper to be cited wherever results are published.
+
+## Phase 8: polishing (2026-11-11)
+
+Numbers are on `val`, from `reports/ranker_artist_pools.md`.
+
+**Tracks by a listener's artists are not added as a second source of candidates (issue #10).**
+The idea: the first 500 candidates hold 36% of what a listener goes on to discover, the
+artist features are the ranker's most useful group, so give the ranker more candidates
+by artists the listener already plays.
+What was tried: `ranker_artist` at its chosen setting, trained on and reordering other
+pools (`python -m m4a_rec.ranker pools ranker_artist`).
+
+| Pool | NDCG@10 | Recall@100 | Recall@500 | NDCG@10 against the first row |
+|---|---|---|---|---|
+| first 500 (the saved model) | 0.0449 | 0.1730 | 0.3639 | |
+| first 400 + 100 by a known artist | 0.0444 | 0.1752 | 0.3726 | -0.0005 (-0.0011 to +0.0001) |
+| first 300 + every known-artist candidate below | 0.0448 | 0.1756 | 0.3781 | -0.0001 (-0.0007 to +0.0007) |
+| first 500 + 200 by a known artist | 0.0447 | 0.1753 | 0.3849 | -0.0002 (-0.0008 to +0.0005) |
+| first 1,000 | 0.0446 | 0.1757 | 0.3905 | -0.0003 (-0.0010 to +0.0004) |
+
+Why not: every wider or artist-led pool holds more of what the listener discovers and
+none raises NDCG@10; every interval includes zero. Recall@100 rises by about
+0.002. The pool is not what limits the top 10: the ranker reaches Recall@10 of 0.040 from
+a pool that holds 0.364, so the room is in how it orders the candidates it already has.
+Limit of the test: candidates are `tt_id`'s first 1,000, so an artist's tracks that
+`tt_id` places lower were never added. A full second source would reach them. It was not
+built: the tracks `tt_id` scores lowest are the least likely to be the missing ones, and
+it would change both snapshots, the ranker, the bundle and every reported number.
+Rejected: building it anyway to close that gap; dropping the idea without a report, which
+would leave the README's own next step untested on paper.
+`test` was not read for this.
