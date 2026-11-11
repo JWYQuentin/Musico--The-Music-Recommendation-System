@@ -40,6 +40,10 @@ small live demo.
   served from their listens by fold-in, score test NDCG@10 = 0.0332 against 0.0351 with
   learned vectors (interval on the gap -0.0055 to +0.0015). A request takes 21 ms
   (known listener) or 56 ms (someone new). All seven phases are done.
+- Phase 8 (polishing), step 1: issue #10, artist-based candidates, tested and not built,
+  2026-11-11. Results are in `reports/ranker_artist_pools.md`: on `val`, no wider or
+  artist-led pool raises NDCG@10 above the first 500's 0.0449. Next: the cold-start
+  listens curve.
 - `pyproject.toml` lists only what the seven phases use. Add a phase's libraries there when the
   phase starts.
 
@@ -125,6 +129,7 @@ python -m m4a_rec.metadata           # seconds; writes data/processed/tracks.par
 python -m m4a_rec.candidates         # both ranker snapshots, ~3 min; prints each feature's mean in the two
 python -m m4a_rec.ranker tune ranker_artist    # or ranker; the stages on val, resumes from reports/<model>_tuning.json
 python -m m4a_rec.ranker ablate ranker_artist  # the chosen setting without each feature group, on val
+python -m m4a_rec.ranker pools ranker_artist   # the chosen setting with other candidate pools, on val, ~15 min; writes reports/ranker_artist_pools.md
 python -m m4a_rec.ranker fit ranker_artist     # and ranker; saves the model and its lists, test untouched
 python -m m4a_rec.ranker val         # every saved list on val; prints, writes nothing
 python -m m4a_rec.ranker report      # val and test, intervals, SHAP; writes reports/ranker.md

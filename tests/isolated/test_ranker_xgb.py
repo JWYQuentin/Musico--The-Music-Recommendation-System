@@ -8,7 +8,9 @@ from m4a_rec.ranker import (
     explain,
     features_of,
     load,
+    pool,
     predict,
+    render_pools,
     render_report,
     render_tuning,
     rerank,
@@ -89,6 +91,81 @@ def test_rerank_keeps_retrieval_order_between_equal_scores():
     infer = pl.DataFrame({"user_id": [1, 1, 1, 1], "track_id": list("dcba"), "tt_rank": [1, 2, 3, 4]})
     recs = rerank(infer, scores=np.array([0.5, 0.5, 0.9]), n_candidates=3)  # d and c tie; by track ID c would come first
     assert dict(zip(recs["track_id"], recs["score"])) == {"b": -1, "d": -2, "c": -3, "a": -4}
+
+
+def test_pool_hand_checked():
+    frame = pl.DataFrame(
+        {
+            "user_id": [1] * 6 + [2] * 4,
+            "tt_rank": [1, 2, 3, 4, 5, 6, 1, 2, 3, 4],
+            # user 1 has played the artists of candidates 2, 4 and 6; user 2 those of 1, 2 and 3
+            "artist_tracks": [0.0, 2.0, 0.0, 1.0, 0.0, 3.0, 1.0, 1.0, 1.0, 0.0],
+        }
+    )
+    marked = lambda top, known: frame.select(pool(top, known)).to_series().to_list()  # noqa: E731
+    first_two = [True, True, False, False, False, False, True, True, False, False]
+    assert marked(2, 0) == first_two == frame.select(pl.col("tt_rank") <= 2).to_series().to_list()
+    # one more each: user 1's candidate 4 (3 is not by a known artist), user 2's candidate 3
+    assert marked(2, 1) == [True, True, False, True, False, False, True, True, True, False]
+    assert marked(2, 5) == [True, True, False, True, False, True, True, True, True, False]  # no more than there are
+    backwards = frame.reverse()  # "next" goes by tt_rank, not by row order
+    assert backwards.select(pool(2, 1)).to_series().to_list() == marked(2, 1)[::-1]
+
+
+def test_training_rows_and_rerank_with_a_pool_hand_checked():
+    train = pl.DataFrame(
+        {
+            "user_id": [1, 1, 1, 2, 2, 2],
+            "track_id": list("abcabc"),
+            "tt_rank": [1, 2, 3] * 2,
+            "label": [0, 1, 0, 0, 0, 1],
+            "in_pool": [True, False, True] * 2,  # user 1's positive is outside the pool
+        }
+    )
+    assert training_rows(train, n_candidates=3, pool="in_pool").select("user_id", "track_id").rows() == [(2, "a"), (2, "c")]
+
+    infer = pl.DataFrame(
+        {
+            "user_id": [1, 1, 1, 1, 1, 2, 2, 2],
+            "track_id": list("abcdeabc"),
+            "tt_rank": [1, 2, 3, 4, 5, 1, 2, 3],
+            "in_pool": [True, False, True, False, True, False, True, False],
+        }
+    )
+    # one score per pool row: user 1's a, c, e, then user 2's b
+    recs = rerank(infer, scores=np.array([0.1, 0.9, 0.5, 0.3]), n_candidates=99, pool="in_pool")
+    by_user = lambda u: dict(recs.filter(pl.col("user_id") == u).select("track_id", "score").rows())  # noqa: E731
+    # the pool by score, then the rest in retrieval order, counted on from the pool's size
+    assert by_user(1) == {"c": -1, "e": -2, "a": -3, "b": -4, "d": -5}
+    assert by_user(2) == {"b": -1, "a": -2, "c": -3}
+    assert recs.schema == {"user_id": pl.Int64, "track_id": pl.String, "score": pl.Float32}
+
+
+def test_a_pool_of_the_first_candidates_is_the_run_without_one():
+    train, infer = candidates(seed=0, n=20), candidates(seed=1, n=20)
+    known = pl.lit(0.0).alias("artist_tracks")
+    params = {**PARAMS, "n_candidates": 10}
+    plain = run(train, infer.drop("label"), FEATURES, params, CFG, top1(infer), log=lambda m: None)
+    mark = pool(10, 0)
+    pooled = run(
+        train.with_columns(known).with_columns(in_pool=mark), infer.drop("label").with_columns(known).with_columns(in_pool=mark),
+        FEATURES, {**params, "n_candidates": 3}, CFG, top1(infer), log=lambda m: None, pool="in_pool",  # n_candidates is not used
+    )
+    assert pooled["rounds"] == plain["rounds"] and pooled["metrics"] == plain["metrics"]
+    assert pooled["scores"] == pytest.approx(plain["scores"])
+
+
+def test_pools_table_compares_each_pool_with_the_first():
+    m = lambda v: {"ndcg@10": v, "recall@10": 0.1, "recall@100": 0.3, "recall@500": 0.4}  # noqa: E731
+    rows = [
+        {"pool": {"top": 500, "known_artist": 0}, "size": 500.0, "rounds": 600, "metrics": m(0.04), "gap": None},
+        {"pool": {"top": 400, "known_artist": 1000}, "size": 520.0, "rounds": 450, "metrics": m(0.039), "gap": {"diff": -0.001, "low": -0.002, "high": 0.0005}},
+    ]
+    md = render_pools(rows, "ndcg@10", [10, 20, 100, 500], "ranker_artist", 2000)
+    assert "python -m m4a_rec.ranker pools ranker_artist" in md and "resampling users 2,000 times" in md
+    assert "| Pool | Median size | trees | ndcg@10 | recall@10 | recall@100 | recall@500 | Difference | 95% interval |" in md
+    assert "| first 500 | 500 | 600 | 0.0400 | 0.1000 | 0.3000 | 0.4000 |  |  |" in md
+    assert "| first 400 + up to 1,000 below by a known artist | 520 | 450 | 0.0390 | 0.1000 | 0.3000 | 0.4000 | -0.0010 | -0.0020 to +0.0005 |" in md
 
 
 def test_ranker_learns_the_feature_that_decides_the_label():

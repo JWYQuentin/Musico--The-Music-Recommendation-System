@@ -38,6 +38,16 @@ ranker:
     # Its stages were run starting from the `ranker` setting above.
     ranker_artist: {n_candidates: 500, max_depth: 2, eta: 0.05, lambdarank_pair_method: mean, objective: "rank:ndcg"}
 
+  # `ranker pools <model>` scores the chosen setting on val with each of these in place of the
+  # first n_candidates: a user's first `top` candidates, then up to `known_artist` of their
+  # next ones by an artist they have played. The first is the pool the others are compared with.
+  pools:
+    - {top: 500, known_artist: 0}      # the pool the saved rankers use
+    - {top: 400, known_artist: 100}    # the same size, a fifth of it from known artists
+    - {top: 300, known_artist: 1000}   # every known-artist candidate below the first 300
+    - {top: 500, known_artist: 200}    # a larger pool
+    - {top: 1000, known_artist: 0}     # every candidate: wider without choosing by artist
+
   # Tuned on val in stages. Each stage tries its combinations on top of the best setting so far.
   stages:
     - {max_depth: [1, 2, 3, 4, 6, 8], eta: [0.1, 0.2]}

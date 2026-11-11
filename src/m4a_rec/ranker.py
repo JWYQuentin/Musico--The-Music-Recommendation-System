@@ -16,6 +16,9 @@ models' output from files, and its tests run in their own process.
                   are not run again.
   ablate <model>  the chosen setting retrained without each of its feature groups, scored
                   on val. Writes reports/<model>_ablation.json.
+  pools <model>   the chosen setting with each pool under `pools` in configs/ranker.yaml in
+                  place of the first n_candidates, scored on val. Writes
+                  reports/<model>_pools.md.
   fit <model>     trains the chosen setting, keeps the tree count that scores best on val,
                   and saves the model under data/processed/models/<model>/ and its lists
                   in data/processed/recs/<model>.parquet.
@@ -23,7 +26,7 @@ models' output from files, and its tests run in their own process.
   report          the same on val and test. Writes reports/ranker.md, the SHAP figure and
                   the chart of every model's result.
 
-Usage: python -m m4a_rec.ranker tune|ablate|fit <model>   or   python -m m4a_rec.ranker val|report
+Usage: python -m m4a_rec.ranker tune|ablate|pools|fit <model>   or   python -m m4a_rec.ranker val|report
 """
 from __future__ import annotations
 
@@ -60,12 +63,27 @@ def features_of(groups: list[str]) -> list[str]:
     return [name for group in groups for name in GROUPS[group]]
 
 
-def training_rows(train: pl.DataFrame, n_candidates: int) -> pl.DataFrame:
-    """Each user's first `n_candidates` candidates, for users with a positive among them.
+def pool(top: int, known_artist: int) -> pl.Expr:
+    """True for a user's first `top` candidates and their next `known_artist` below that by an artist they have played.
+
+    A candidate is by a known artist when its `artist_tracks` is above 0. With
+    `known_artist` 0 this is the user's first `top` candidates, as the rankers use.
+    """
+    below = (pl.col("tt_rank") > top) & (pl.col("artist_tracks") > 0)
+    return (pl.col("tt_rank") <= top) | (below & (below.cast(pl.Int32).cum_sum().over("user_id", order_by="tt_rank") <= known_artist))
+
+
+def reordered(n_candidates: int, pool: str | None = None) -> pl.Expr:
+    """The candidates a ranker trains on and reorders: a user's first `n_candidates`, or the rows the boolean column `pool` marks."""
+    return pl.col("tt_rank") <= n_candidates if pool is None else pl.col(pool)
+
+
+def training_rows(train: pl.DataFrame, n_candidates: int, pool: str | None = None) -> pl.DataFrame:
+    """Each user's first `n_candidates` candidates, or those in `pool`, for users with a positive among them.
 
     A user with no positive gives a ranking loss nothing to compare, so they are left out.
     """
-    top = train.filter(pl.col("tt_rank") <= n_candidates)
+    top = train.filter(reordered(n_candidates, pool))
     with_positive = top.select("user_id", "label").filter(pl.col("label") == 1).select("user_id").unique()
     return top.join(with_positive, on="user_id", how="semi", maintain_order="left")
 
@@ -91,19 +109,25 @@ def train_booster(rows: pl.DataFrame, features: list[str], params: dict, cfg: di
     return xgb.train(settings, to_dmatrix(rows, features, label=True), num_boost_round=cfg["max_rounds"])
 
 
-def rerank(infer: pl.DataFrame, scores: np.ndarray, n_candidates: int) -> pl.DataFrame:
+def rerank(infer: pl.DataFrame, scores: np.ndarray, n_candidates: int, pool: str | None = None) -> pl.DataFrame:
     """The final lists: each user's first `n_candidates` candidates by `scores`, then the rest in retrieval order.
 
     `scores` has one value per row of `infer` with tt_rank <= n_candidates, in row order.
     Candidates the ranker scores the same keep their retrieval order. The score handed on is
     minus the track's place in the final list, so nothing later has to break a tie.
+
+    With `pool`, the rows that boolean column marks are reordered in place of the first
+    `n_candidates`, and `scores` has one value for each of them.
     """
-    keys = infer.select(*PAIR, "tt_rank")  # before filtering, so the feature columns are never copied
-    top = keys.filter(pl.col("tt_rank") <= n_candidates).with_columns(model=pl.Series(scores))
+    keys = infer.select(*PAIR, "tt_rank", top=reordered(n_candidates, pool))  # before filtering, so the feature columns are never copied
+    top = keys.filter("top").with_columns(model=pl.Series(scores))
     top = top.sort(["user_id", "model", "tt_rank"], descending=[False, True, False]).select(
         *PAIR, score=-pl.int_range(1, pl.len() + 1).over("user_id").cast(pl.Float32)
     )
-    rest = keys.filter(pl.col("tt_rank") > n_candidates).select(*PAIR, score=-pl.col("tt_rank").cast(pl.Float32))
+    place = pl.col("tt_rank")
+    if pool is not None:  # a pool need not be a user's first rows, so the rest are counted on from its size
+        place = pl.col("top").sum().over("user_id") + (~pl.col("top")).cast(pl.Int32).cum_sum().over("user_id", order_by="tt_rank")
+    rest = keys.with_columns(place=place).filter(~pl.col("top")).select(*PAIR, score=-pl.col("place").cast(pl.Float32))
     return pl.concat([top, rest])
 
 
@@ -115,23 +139,27 @@ def run(
     cfg: dict,
     evaluate: Callable[[pl.DataFrame], dict],
     log: Callable[[str], None] = print,
+    pool: str | None = None,
 ) -> dict:
     """Train one ranker and keep the number of trees whose lists `evaluate` scores best.
 
     `params` is one setting from the config, `cfg` the `ranker` section. The model is
     trained once to `max_rounds` trees; its lists at every `check_every` trees go to
-    `evaluate`, and the count with the best `select_on` is kept.
+    `evaluate`, and the count with the best `select_on` is kept. With `pool`, a boolean
+    column of both snapshots, the ranker trains on and reorders the rows it marks in
+    place of each user's first `n_candidates`.
     """
     started = time.time()
-    rows = training_rows(train, params["n_candidates"])
+    rows = training_rows(train, params["n_candidates"], pool)
     booster = train_booster(rows, features, params, cfg)
     log(f"  trained on {rows.height:,} rows of {rows['user_id'].n_unique():,} users in {time.time() - started:.0f}s")
-    keys = infer.select(*PAIR, "tt_rank")  # all that reordering needs
-    top = to_dmatrix(infer.select(list(dict.fromkeys(["tt_rank", *features]))).filter(pl.col("tt_rank") <= params["n_candidates"]), features)
+    marks = [] if pool is None else [pool]
+    keys = infer.select(*PAIR, "tt_rank", *marks)  # all that reordering needs
+    top = to_dmatrix(infer.select(list(dict.fromkeys(["tt_rank", *features, *marks]))).filter(reordered(params["n_candidates"], pool)), features)
     best, history = None, []
     for rounds in range(cfg["check_every"], cfg["max_rounds"] + 1, cfg["check_every"]):
         scores = booster.predict(top, iteration_range=(0, rounds))
-        metrics = evaluate(rerank(keys, scores, params["n_candidates"]))
+        metrics = evaluate(rerank(keys, scores, params["n_candidates"], pool))
         history.append({"rounds": rounds, cfg["select_on"]: metrics[cfg["select_on"]]})
         if best is None or metrics[cfg["select_on"]] > best["metrics"][cfg["select_on"]]:
             best = {"rounds": rounds, "metrics": metrics, "scores": scores}
@@ -245,6 +273,44 @@ def render_tuning(rows: list[dict], select_on: str, ks: list[int], model: str) -
     return "\n".join(L)
 
 
+def render_pools(rows: list[dict], select_on: str, ks: list[int], model: str, n_boot: int) -> str:
+    """Every pool tried for `model`, in the order given; the first is the one the others are compared with.
+
+    Each row is {pool: {top, known_artist}, size, rounds, metrics, gap}: `size` the median
+    pool per user and `gap` {diff, low, high} for `select_on` against the first row, None there.
+    """
+    shown = list(dict.fromkeys([select_on, f"recall@{ks[0]}", f"recall@{ks[2]}", f"recall@{ks[-1]}"]))
+    name = lambda p: f"first {p['top']:,}" + (f" + up to {p['known_artist']:,} below by a known artist" if p["known_artist"] else "")  # noqa: E731
+    L = [
+        f"# Candidate pools: `{model}`",
+        "",
+        f"Generated by `python -m m4a_rec.ranker pools {model}`. Do not edit by hand; rerun instead.",
+        "",
+        "The chosen setting, trained on and reordering a different set of each user's candidates,",
+        "scored on val. A pool is a user's first candidates from `tt_id`, then their next ones below",
+        "that by an artist they have played. The first row is the pool the saved model uses.",
+        "Candidates are `tt_id`'s first 1,000 throughout, so a track by a known artist that `tt_id`",
+        "places lower than that is never added.",
+        "",
+        f"`Difference` is {select_on} minus the first row's, with a 95% interval from resampling users {n_boot:,} times.",
+        "",
+    ]
+    L += table(
+        ["Pool", "Median size", "trees", *shown, "Difference", "95% interval"],
+        [
+            [
+                name(r["pool"]),
+                int(r["size"]),
+                r["rounds"],
+                *(r["metrics"][m] for m in shown),
+                *(["", ""] if r["gap"] is None else [f"{r['gap']['diff']:+.4f}", f"{r['gap']['low']:+.4f} to {r['gap']['high']:+.4f}"]),
+            ]
+            for r in rows
+        ],
+    )
+    return "\n".join(L)
+
+
 def render_report(
     results: dict,
     gaps: list[dict],
@@ -340,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     cfg = load_config()
     r, ks, reports, processed = cfg["ranker"], cfg["metrics"]["ks"], cfg["paths"]["reports"], cfg["paths"]["processed"]
-    one_model = len(argv) == 2 and argv[0] in ("tune", "ablate", "fit") and argv[1] in r["models"]
+    one_model = len(argv) == 2 and argv[0] in ("tune", "ablate", "pools", "fit") and argv[1] in r["models"]
     if not (one_model or argv in (["val"], ["report"])):
         print(__doc__)
         return 2
@@ -379,6 +445,22 @@ def main(argv: list[str] | None = None) -> int:
                 result = on_val(features_of([g for g in groups if g != group]), chosen)
                 rows.append({"without": group, "rounds": result["rounds"], "metrics": result["metrics"]})
                 (reports / f"{model}_ablation.json").write_text(stable_json(rows))
+        elif command == "pools":
+            rows, first = [], None
+            for p in r["pools"]:
+                say(f"{model} pool {p}")
+                mark = pool(p["top"], p["known_artist"])
+                marked = infer.with_columns(in_pool=mark)
+                result = run(
+                    train.with_columns(in_pool=mark), marked, features_of(groups), chosen, r, lambda recs: score(recs, "val"), log=say, pool="in_pool"
+                )
+                lists = rerank(marked, result["scores"], chosen["n_candidates"], pool="in_pool")
+                gap = None if first is None else difference(lists, first, "val")[r["select_on"]]
+                first = lists if first is None else first
+                size = marked.group_by("user_id").agg(pl.col("in_pool").sum())["in_pool"].median()
+                rows.append({"pool": p, "size": size, "rounds": result["rounds"], "metrics": result["metrics"], "gap": gap})
+            (reports / f"{model}_pools.md").write_text(render_pools(rows, r["select_on"], ks, model, cfg["bootstrap"]["n"]))
+            say(f"wrote {reports / f'{model}_pools.md'}")
         else:
             say(f"{model} {chosen}")
             result = on_val(features_of(groups), chosen)
