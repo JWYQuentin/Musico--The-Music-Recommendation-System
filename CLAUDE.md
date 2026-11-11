@@ -42,8 +42,12 @@ small live demo.
   (known listener) or 56 ms (someone new). All seven phases are done.
 - Phase 8 (polishing), step 1: issue #10, artist-based candidates, tested and not built,
   2026-11-11. Results are in `reports/ranker_artist_pools.md`: on `val`, no wider or
-  artist-led pool raises NDCG@10 above the first 500's 0.0449. Next: the cold-start
-  listens curve.
+  artist-led pool raises NDCG@10 above the first 500's 0.0449.
+- Phase 8, step 2: the listens curve, done, 2026-11-11. Results are in
+  `reports/listens_curve.md`: held-out listeners served from their N most recent tracks.
+  On `test`, 1 track gives NDCG@10 = 0.0157 (popularity 0.0063, whole history 0.0332)
+  and 50 tracks are within noise of the whole history. Next: the questionnaire, placed
+  on this curve.
 - `pyproject.toml` lists only what the seven phases use. Add a phase's libraries there when the
   phase starts.
 
@@ -142,6 +146,7 @@ python -m m4a_rec.newcomers          # tt_id and ALS without 10% of listeners, ~
 python -m m4a_rec.bundle             # the service's bundle, seconds; `bundle newcomers` for the held-out version
 python -m m4a_rec.serve tune         # the fold-in weighting on val; prints
 python -m m4a_rec.serve report       # parity with the saved lists, new listeners, latency; writes reports/serving.md
+python -m m4a_rec.serve curve        # new listeners served from their N most recent tracks, ~2 min; writes reports/listens_curve.md
 python -m m4a_rec.api                # the API on 127.0.0.1:8000; try it at /docs
 make docker-build && make docker-run # the same in a container that holds code only
 pytest -q
