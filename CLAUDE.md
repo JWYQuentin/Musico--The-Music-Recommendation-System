@@ -46,8 +46,12 @@ small live demo.
 - Phase 8, step 2: the listens curve, done, 2026-11-11. Results are in
   `reports/listens_curve.md`: held-out listeners served from their N most recent tracks.
   On `test`, 1 track gives NDCG@10 = 0.0157 (popularity 0.0063, whole history 0.0332)
-  and 50 tracks are within noise of the whole history. Next: the questionnaire, placed
-  on this curve.
+  and 50 tracks are within noise of the whole history.
+- Phase 8, step 3: the questionnaire, measured, 2026-11-12. Results are in
+  `reports/questionnaire.md`: the same listeners served from answers read off their own
+  listens, so upper bounds. On `test`, 3 artists give NDCG@10 = 0.0188 and 3 genres plus
+  a mainstream question 0.0172, about one or two recent tracks (0.0157, 0.0196). Not
+  built yet: an API endpoint that takes a form.
 - `pyproject.toml` lists only what the seven phases use. Add a phase's libraries there when the
   phase starts.
 
@@ -147,6 +151,8 @@ python -m m4a_rec.bundle             # the service's bundle, seconds; `bundle ne
 python -m m4a_rec.serve tune         # the fold-in weighting on val; prints
 python -m m4a_rec.serve report       # parity with the saved lists, new listeners, latency; writes reports/serving.md
 python -m m4a_rec.serve curve        # new listeners served from their N most recent tracks, ~2 min; writes reports/listens_curve.md
+python -m m4a_rec.questionnaire tune     # look-alike neighbours and seed tracks per artist on val, ~2 min; prints
+python -m m4a_rec.questionnaire report   # new listeners served from a form's answers, ~2 min; writes reports/questionnaire.md
 python -m m4a_rec.api                # the API on 127.0.0.1:8000; try it at /docs
 make docker-build && make docker-run # the same in a container that holds code only
 pytest -q
@@ -204,6 +210,11 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
   `candidates.snapshot` directly. `serve.py` adds the ranker, reasons and titles, and its
   `report` command scores the service. `api.py` is the HTTP layer. `newcomers.py` fits the
   models without the held-out listeners for the new-listener test.
+- `questionnaire.py` serves those held-out listeners from answers instead of listens. A
+  `Sheet` (`read_sheet`) holds what the answers are read from. Genre answers become a
+  two-tower vector through `look_alikes`; artist answers become listens through
+  `seed_tracks`; `lists` hands both to `bundle` and `serve` unchanged. It imports
+  `serve.py`, so the same import rules apply and its tests are in `tests/isolated/`.
 - `rank_features.build` takes `pop` (`population()`: what needs everyone's listens) and
   `side` (`scaled()`: the track vectors at length 1). Left out, both are computed from
   its arguments, as the snapshots do; the service computes them once. A new feature that
@@ -214,7 +225,7 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
   New modules follow the same shape so they can be tested the same way.
 - `load_config()` merges every file under `configs/` (`data.yaml`, `eval.yaml`,
   `baselines.yaml`, `twotower.yaml`, `ranker.yaml`, `metadata.yaml`, `bias.yaml`,
-  `demo.yaml`, `serve.yaml`) into one dict, so
+  `demo.yaml`, `serve.yaml`, `questionnaire.yaml`) into one dict, so
   top-level keys must not collide across config files. It turns `paths` into absolute
   `Path`s and creates those directories. A new config file has to be added to it.
 - Time ranges are half-open `(start, end]` everywhere: an event exactly on a boundary

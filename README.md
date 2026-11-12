@@ -193,6 +193,18 @@ in the reply.
   ([`reports/listens_curve.md`](reports/listens_curve.md)).
 
   ![NDCG@10 by how much a new listener has played](reports/figures/listens_curve.png)
+- **With no listens at all, three answers are worth about one or two recent tracks.**
+  The same listeners were served from nothing but the answers they would give to a short
+  form, read off their own listens, so these are upper bounds on a real form. Naming
+  three favourite artists gives NDCG@10 = 0.0188 on `test`, and three genres plus a
+  "mainstream or deep cuts" question give 0.0172, against 0.0157 for one real recent
+  track, 0.0223 for three and 0.0063 for the most popular tracks. Neither form can be
+  told apart from one recent track (artists: +0.0031, interval −0.0033 to +0.0092).
+  Asking more adds nothing: seven questions score 0.0184. How genre answers are used
+  matters. Averaging the vectors of the 50 known listeners with the closest taste works;
+  playing each genre's most popular track for the newcomer scores 0.0058, below
+  popularity. The API does not take a form yet
+  ([`reports/questionnaire.md`](reports/questionnaire.md)).
 - **Fast:** a median of 21 ms per request for a known listener and 56 ms for someone new,
   on an Apple-silicon Mac with 10 cores.
 
@@ -289,7 +301,7 @@ authors and unpacked to `data/raw/music4all/`. On macOS, XGBoost needs
 | Ranker | `python -m m4a_rec.metadata`, `candidates`, `ranker tune ranker_artist`, `ranker fit ranker`, `ranker fit ranker_artist`, `ranker report` | `reports/ranker.md` |
 | Bias and fairness | `python -m m4a_rec.bias tune`, `bias report` | `reports/bias.md` |
 | Demo | `python -m m4a_rec.index data/processed/models/tt_id_refit`, `demo` | the demo page |
-| Service | `python -m m4a_rec.newcomers`, `bundle newcomers`, `bundle`, `serve report`, `serve curve` | `reports/serving.md`, `reports/listens_curve.md`, the bundle the API serves |
+| Service | `python -m m4a_rec.newcomers`, `bundle newcomers`, `bundle`, `serve report`, `serve curve`, `questionnaire tune`, `questionnaire report` | `reports/serving.md`, `reports/listens_curve.md`, `reports/questionnaire.md`, the bundle the API serves |
 
 The `Makefile` wraps these. The window is cut by time into four parts:
 
@@ -320,6 +332,7 @@ src/m4a_rec/    one module per step
   bias, demo                         bias and fairness measures; the demo page
   bundle, serve, api                 the service: its bundle, both stages at request time, HTTP
   newcomers                          the models refitted without 10% of listeners, for the new-listener test
+  questionnaire                      those listeners served from answers to a form instead of listens
 tests/          hand-checked tests on synthetic data
 reports/        decisions.md (every design choice and why) and the generated reports
 CLAUDE.md       project brief and rules for Claude Code
