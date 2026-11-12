@@ -998,3 +998,96 @@ For retrieval alone, 100 recent tracks beat the whole history on both splits (`t
 0.0308 against 0.0269): the fold-in averages every track a listener ever played with
 equal weight. Not acted on here; weighting recent tracks would be a choice for
 `serve tune` on `val`.
+
+### The questionnaire (2026-11-12)
+
+Numbers are in `reports/questionnaire.md` (`python -m m4a_rec.questionnaire report`).
+The question: what can the service give someone with no listens at all, from a few
+answers, and how many real listens is that worth on the listens curve?
+
+**Answers are read off a held-out listener's own train-split listens.**
+What: their strongest genres (the 685 Onion genre columns already in `features.npz`,
+each track's weights added up over the listener's tracks), which third of the known
+listeners they fall in by the mean popularity percentile of their tracks (the ranker's
+`user_mainstream`), and their most-played artists. A genre answer is a list of names
+with no weights, as a form would collect it.
+Why: there are no real answers to score, and the same 1,435 listeners already have the
+new-listener test and the listens curve to compare with.
+What it means: a person would answer less exactly than their listens do, so every row
+is an upper bound. The report says so.
+Rejected: a form shown to real people, which this project has no way to run; random or
+noised answers, which would need a made-up error rate.
+
+**Genre answers go to look-alike listeners, not to seed tracks.**
+What: the 50 known listeners whose genre profiles are closest to the answer by cosine,
+within the same mainstream third when that question is asked. Their learned two-tower
+vectors are averaged and the list is the retrieval order for that vector. The ranker is
+not run: with no listens it has nothing to compute its features from.
+Why: the first plan turned each named genre into its most-listened tracks and folded
+those in like listens. On `val` three genres give NDCG@10 = 0.0114 that way (0.0061 for
+the most popular tracks) and 0.0171 through look-alikes; on `test` the seed tracks give
+0.0058, below popularity. A genre's most popular tracks say little about which part of
+the genre a listener plays; fifty listeners with the same taste say more. The seed-track
+row stays in the report to show this.
+Rejected: one average vector per genre (worse than popularity in a first check on
+`val`); running the ranker on empty histories, which it never saw in training.
+
+**Artist answers become one seed track each, then the service runs as for anyone new.**
+What: each named artist's most-listened track among the known listeners, as one play at
+the bundle's last moment; then the saved fold-in, retrieval and ranker. The seed tracks
+count as played, so they are not recommended back.
+Why: an artist pins taste down far more narrowly than a genre, and the artist features
+are the ranker's most useful group. Rejected: three or five tracks per artist, which did
+worse on `val` (below).
+
+**Two numbers are tuned on `val`, by a rule set beforehand; `test` was run once.**
+The forms (1, 3, 5 genres with and without the mainstream question; 1, 3, 5 artists;
+one form asking 3 genres, the mainstream question and 3 artists) are fixed in
+`configs/questionnaire.yaml`. `questionnaire tune` picks each number by the highest
+mean NDCG@10 over the forms that use it, the smaller number on a tie at four places.
+
+| Neighbours | 10 | 20 | 50 | 100 |
+|---|---|---|---|---|
+| Mean NDCG@10 over the six genre forms | 0.0138 | 0.0151 | 0.0154 | 0.0154 |
+
+| Tracks per artist | 1 | 3 | 5 |
+|---|---|---|---|
+| Mean NDCG@10 over the three artist forms | 0.0213 | 0.0202 | 0.0185 |
+
+Chosen: 50 neighbours, 1 track per artist. The seed-track row uses 1 track per genre,
+its own best on `val` (0.0114; 10 tracks give 0.0093). The spread between 20, 50 and
+100 neighbours is small next to the intervals in the report.
+
+**The Last.fm tag file (`id_tags_dict`) is not read.**
+Why: neither the Zenodo record nor its README says when the tags were collected, so
+they may postdate the training period, and a throwaway check on `val` that added mood
+and era tags to the seed-track form showed no gain. Genres and artists are fixed facts
+about a track. Rejected: using the tags with a caveat.
+
+**What the questionnaire shows (`test`, 1,014 listeners, NDCG@10).**
+
+| What the service is given | NDCG@10 | Against 1 recent track |
+|---|---|---|
+| nothing: the most popular tracks | 0.0063 | |
+| 3 genres | 0.0167 | +0.0010 (-0.0050 to +0.0067) |
+| 3 genres + mainstream | 0.0172 | +0.0015 (-0.0047 to +0.0073) |
+| 3 artists | 0.0188 | +0.0031 (-0.0033 to +0.0092) |
+| 3 genres + mainstream + 3 artists | 0.0184 | +0.0027 (-0.0036 to +0.0088) |
+| 1 recent track | 0.0157 | |
+| 3 recent tracks | 0.0223 | +0.0066 (+0.0020 to +0.0116) |
+| whole history | 0.0332 | +0.0174 (+0.0105 to +0.0241) |
+
+Three or four answers are worth about one or two real recent tracks (two give 0.0196 on
+the listens curve) and nearly three times the most popular tracks. None of the forms can be told apart from one recent track;
+three recent tracks can.
+Asking more does not help: five genres or five artists score what three do, and the
+seven-question form scores what three artists do alone. One genre gives 0.0137.
+On `val` the picture is different: one recent track (0.0280) beats every form (3
+artists 0.0211, 3 genres + mainstream 0.0191). From `val` to `test` the recent track
+loses almost half and the three-genre forms lose a tenth or less. Stated taste is a
+weaker signal than a recent listen, and a slower-dating one.
+The whole genre profile, more than any form could ask, gives 0.0224: the ceiling for
+genre questions asked this way is about three recent tracks.
+Not built here: an endpoint that takes a form. The numbers point to asking for three
+artists first, since the ranker can then run, and three genres from someone who names
+none. The two forms are not compared with an interval here.

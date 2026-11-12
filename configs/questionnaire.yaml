@@ -1,0 +1,23 @@
+# Phase 8 questionnaire settings. Every number here is a decision; log changes in reports/decisions.md.
+
+# `python -m m4a_rec.questionnaire` serves the held-out listeners of the new-listener test
+# from the answers they would give to a form, read off their own train-split listens.
+questionnaire:
+  # The forms, fixed before any number was looked at.
+  genres: [1, 3, 5]            # strongest genres named, each with and without the mainstream question
+  artists: [1, 3, 5]           # favourite artists named
+  combined: {genres: 3, artists: 3}   # the form that asks both, with the mainstream question; its genre count is also the one tried as seed tracks
+  reference_listens: [1, 3, 10]       # real recent tracks shown for comparison (rows of the listens curve); every form is compared with the first
+
+  # What `questionnaire tune` tries on val.
+  grid:
+    neighbours: [10, 20, 50, 100]     # known listeners averaged into a look-alike vector
+    tracks_per_artist: [1, 3, 5]      # most-listened tracks of a named artist that stand in for listens
+    tracks_per_genre: [1, 3, 5, 10]   # the same for a named genre, for the row that shows why seed tracks are not used
+
+  # Chosen on val by `questionnaire tune`: the highest mean NDCG@10 over the forms that use the
+  # number, the smaller number on a tie at four places.
+  chosen:
+    neighbours: 50             # 0.0154, level with 100; 20 gives 0.0151 and 10 gives 0.0138
+    tracks_per_artist: 1       # 0.0213; 3 give 0.0202 and 5 give 0.0185
+    tracks_per_genre: 1        # 0.0114; more tracks do worse
