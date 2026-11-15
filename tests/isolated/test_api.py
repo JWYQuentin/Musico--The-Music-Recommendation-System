@@ -12,7 +12,7 @@ MAX_K = 20
 
 @pytest.fixture(scope="module")
 def client(service):
-    return TestClient(create_app(service, MAX_K))
+    return TestClient(create_app(service, MAX_K, {"neighbours": 3, "tracks_per_artist": 1}))
 
 
 def listens_of(service, user):
@@ -73,3 +73,26 @@ def test_similar_tracks(client, service):
     assert got.status_code == 200 and [r["rank"] for r in got.json()] == [1, 2, 3]
     assert track not in [r["track_id"] for r in got.json()]
     assert client.get("/tracks/nope/similar").status_code == 404
+
+
+def test_genres_lists_the_names_a_form_may_use(client):
+    assert client.get("/genres").json() == ["Rock", "Pop", "Jazz", "Folk", "Hip Hop", "Noise"]
+
+
+def test_someone_with_no_listens_from_a_form(client):
+    got = client.post("/onboarding", json={"artists": ["band 3", "Nobody"], "genres": ["rock"], "k": 5})
+    assert got.status_code == 200
+    body = got.json()
+    assert body["used"] == "artists" and body["unknown_artists"] == ["Nobody"] and body["unknown_genres"] == []
+    assert [r["rank"] for r in body["recommendations"]] == [1, 2, 3, 4, 5] and all(r["reasons"] for r in body["recommendations"])
+
+    body = client.post("/onboarding", json={"genres": ["Rock", "opera"], "mainstream": "deep cuts", "k": 5}).json()
+    assert body["used"] == "genres" and body["unknown_genres"] == ["opera"]
+    assert len(body["recommendations"]) == 5 and all(r["reasons"] is None for r in body["recommendations"])
+
+
+def test_bad_forms_are_422(client):
+    assert client.post("/onboarding", json={}).status_code == 422
+    assert client.post("/onboarding", json={"artists": ["Nobody"], "genres": ["opera"]}).status_code == 422
+    assert client.post("/onboarding", json={"genres": ["rock"], "mainstream": "sometimes"}).status_code == 422
+    assert client.post("/onboarding", json={"genres": ["rock"], "k": MAX_K + 1}).status_code == 422

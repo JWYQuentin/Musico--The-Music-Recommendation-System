@@ -9,6 +9,8 @@ is shared for research only. Do not expose it beyond this machine.
   GET  /users/{user_id}/recommendations  a listener the models know
   POST /recommendations                  anyone, from their listens: {"plays": [{"track_id", "timestamp"}], "k", "explain"}
   GET  /tracks/{track_id}/similar        the nearest tracks in the two-tower space
+  POST /onboarding                       someone with no listens, from a form: {"artists", "genres", "mainstream", "k", "explain"}
+  GET  /genres                           the genre names a form may use
 
 Like serve.py it must not import torch, faiss or implicit.
 
@@ -19,13 +21,14 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import datetime, timezone
+from typing import Literal
 
 import polars as pl
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from . import serve
+from . import questionnaire, serve
 from .config import load_config
 
 
@@ -54,6 +57,21 @@ class Recommendations(BaseModel):
     unknown_tracks: list[str] = Field([], description="Track IDs handed in that are not in the catalogue; they were left out")
 
 
+class Answers(BaseModel):
+    artists: list[str] = Field([], description="Favourite artists, best three; spelled as in the catalogue, case ignored")
+    genres: list[str] = Field([], description="Favourite genres, best three, from GET /genres; used only if no artist is known")
+    mainstream: Literal["mainstream", "in between", "deep cuts"] | None = Field(None, description="Used with genres only")
+    k: int = Field(10, ge=1)
+    explain: bool = True
+
+
+class FormRecommendations(BaseModel):
+    recommendations: list[Track]
+    used: Literal["artists", "genres"] = Field(description="Which answers made the list: artists when any is known, else genres")
+    unknown_artists: list[str] = Field([], description="Artists not in the catalogue; they were left out")
+    unknown_genres: list[str] = Field([], description="Genres not in GET /genres; they were left out")
+
+
 class SimilarTrack(BaseModel):
     track_id: str
     rank: int
@@ -67,7 +85,9 @@ def naive_utc(t: datetime | None) -> datetime | None:
     return t.astimezone(timezone.utc).replace(tzinfo=None) if t is not None and t.tzinfo else t
 
 
-def create_app(s: serve.Service, max_k: int) -> FastAPI:
+def create_app(s: serve.Service, max_k: int, chosen: dict) -> FastAPI:
+    """`chosen` is the questionnaire's chosen setting: neighbours and tracks_per_artist."""
+    onboarding = questionnaire.prepare(s)
     app = FastAPI(title="m4a-rec", summary="Two-stage music recommender on Music4All-Onion. Local only.")
 
     @app.get("/health")
@@ -103,6 +123,22 @@ def create_app(s: serve.Service, max_k: int) -> FastAPI:
         except KeyError:
             raise HTTPException(404, f"no track {track_id} in the catalogue") from None
 
+    @app.post("/onboarding", response_model=FormRecommendations)
+    def for_answers(answers: Answers) -> dict:
+        if answers.k > max_k:
+            raise HTTPException(422, f"k is at most {max_k}")
+        try:
+            return questionnaire.for_answers(
+                s, onboarding, answers.artists, answers.genres, answers.mainstream, answers.k, answers.explain, chosen["neighbours"],
+                chosen["tracks_per_artist"],
+            )
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from None
+
+    @app.get("/genres")
+    def genres() -> list[str]:
+        return s.bundle.genres
+
     return app
 
 
@@ -114,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=c["port"])
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     s = serve.load(cfg["paths"]["processed"] / "serving")
-    uvicorn.run(create_app(s, c["max_k"]), host=args.host, port=args.port)
+    uvicorn.run(create_app(s, c["max_k"], cfg["questionnaire"]["chosen"]), host=args.host, port=args.port)
     return 0
 
 

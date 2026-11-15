@@ -3,7 +3,7 @@ import bz2
 import numpy as np
 import pytest
 
-from m4a_rec.features import BLOCKS, load, read_matrix, transform, zscore
+from m4a_rec.features import BLOCKS, genre_names, load, read_matrix, transform, zscore
 
 
 def write(path, header, rows):
@@ -18,6 +18,7 @@ def test_read_matrix_follows_the_requested_order(tmp_path):
     assert read_matrix(tmp_path / "f.tsv.bz2", ["c", "a"]).tolist() == [[5, 6], [1, 2]]
     with pytest.raises(ValueError):
         read_matrix(tmp_path / "f.tsv.bz2", ["a", "zzz"])
+    assert genre_names(tmp_path / "f.tsv.bz2") == ["x", "hip hop"]  # the names of read_matrix's columns, in order
 
 
 def test_zscore_hand_checked():

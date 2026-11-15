@@ -1091,3 +1091,30 @@ genre questions asked this way is about three recent tracks.
 Not built here: an endpoint that takes a form. The numbers point to asking for three
 artists first, since the ranker can then run, and three genres from someone who names
 none. The two forms are not compared with an interval here.
+
+### The onboarding endpoint (2026-11-15)
+
+**`POST /onboarding` serves the two measured forms, artists first.**
+What: a form names favourite artists, genres and optionally the mainstream answer
+("mainstream", "in between", "deep cuts"). If any named artist is in the catalogue, each
+gets its most-listened track as a seed and the service runs as for anyone new (fold-in,
+retrieval, ranker, reasons); the genres and the mainstream answer are then not used.
+Otherwise the genres go to the 50 nearest look-alike listeners, within the mainstream
+third when it is answered, and the list is their retrieval order with no reasons. A form
+with nothing known is a 422. The settings are `questionnaire.chosen`; nothing new is tuned.
+Why: three artists scored highest on `test` (NDCG@10 = 0.0188) and let the ranker run;
+adding three genres and the mainstream question to them scored 0.0184, so the two are not
+combined. Three genres with the mainstream question (0.0172) are the fallback. The forms
+were not compared with an interval, so the order rests on the point estimates and on
+the ranker being usable. On 200 held-out listeners the endpoint's code gives the same
+top 10 as `questionnaire.form` for both paths, every one of them.
+Rejected: combining artists and genres (no gain measured, one more path to keep);
+running the ranker on the genre path (it has no listens to compute features from).
+
+**Names are matched with case and outer spaces ignored.**
+What: artist names come from the bundle's titles, genre names from the header of Onion's
+genre file, saved in the bundle as `genres.json` (`GET /genres` lists them). Two artist
+spellings that match once case is ignored seed both (two such names in the catalogue).
+Unknown names are returned in the reply, as unknown track IDs are.
+Why: a person types names; exact spelling with case would refuse most of them.
+Rejected: fuzzy matching or an artist search call, left for when a form front end exists.

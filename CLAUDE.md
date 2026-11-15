@@ -50,8 +50,11 @@ small live demo.
 - Phase 8, step 3: the questionnaire, measured, 2026-11-12. Results are in
   `reports/questionnaire.md`: the same listeners served from answers read off their own
   listens, so upper bounds. On `test`, 3 artists give NDCG@10 = 0.0188 and 3 genres plus
-  a mainstream question 0.0172, about one or two recent tracks (0.0157, 0.0196). Not
-  built yet: an API endpoint that takes a form.
+  a mainstream question 0.0172, about one or two recent tracks (0.0157, 0.0196).
+- Phase 8, step 4: the onboarding endpoint, done, 2026-11-15. `POST /onboarding` takes
+  favourite artists (used when any is known) or genres plus an optional mainstream answer,
+  and gives exactly the lists `questionnaire.form` scored (checked on 200 held-out
+  listeners for both paths). `GET /genres` lists the genre names.
 - `pyproject.toml` lists only what the seven phases use. Add a phase's libraries there when the
   phase starts.
 
@@ -80,11 +83,13 @@ Music4All-Onion, Zenodo record 6609677, CC BY 4.0. Listening events come from La
 | `data/processed/demo/index.html` | the demo page. Holds titles and artists: never commit it |
 | `data/processed/models/als_refit/` | the ALS fit behind the `infer` snapshot, saved by `candidates`: vectors and IDs, settings in `meta.json` |
 | `data/processed/models/{tt_id,als}_newcomers/` | `tt_id` and ALS fitted on both train splits without the listeners in `tt_id_newcomers/held_out_users.npy` |
-| `data/processed/serving/` | the service's bundle: vectors, ranker, features, codes, population numbers, listens, titles. Holds titles: never commit it or build it into an image |
+| `data/processed/serving/` | the service's bundle: vectors, ranker, features, codes, population numbers, listens, titles, genre names. Holds titles: never commit it or build it into an image |
 | `data/processed/serving_newcomers/` | the same bundle without the held-out listeners, from the models fitted without them |
 
 - There are no likes, skips, or play durations. A row means "user played track at time".
-- Track titles, artists, and genre names are NOT in Onion. They come from the base
+- Track titles and artists are NOT in Onion. (Its genre file's header does name its 685
+  genre columns; those names are Onion's, CC BY, and the bundle keeps them in
+  `genres.json`.) Titles, artists and per-track genre labels come from the base
   Music4All dataset, which arrived on 2026-10-10 (`data/raw/music4all.zip`, unpacked to
   `data/raw/music4all/` without its audio). It covers every training track.
 - Of that dataset only fixed facts are used: title, artist, album, year, language, genre
@@ -213,7 +218,9 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
 - `questionnaire.py` serves those held-out listeners from answers instead of listens. A
   `Sheet` (`read_sheet`) holds what the answers are read from. Genre answers become a
   two-tower vector through `look_alikes`; artist answers become listens through
-  `seed_tracks`; `lists` hands both to `bundle` and `serve` unchanged. It imports
+  `seed_tracks`; `lists` hands both to `bundle` and `serve` unchanged. `prepare` and
+  `for_answers` put the same paths behind `api.py`'s `POST /onboarding`: artists first,
+  genres for someone who names no known artist. It imports
   `serve.py`, so the same import rules apply and its tests are in `tests/isolated/`.
 - `rank_features.build` takes `pop` (`population()`: what needs everyone's listens) and
   `side` (`scaled()`: the track vectors at length 1). Left out, both are computed from

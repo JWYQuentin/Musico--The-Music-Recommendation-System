@@ -3,17 +3,22 @@ from datetime import datetime
 
 import numpy as np
 import polars as pl
+import pytest
 import scipy.sparse as sp
 
 from m4a_rec import bundle
 from m4a_rec.evaluate import PAIR
 from m4a_rec.questionnaire import (
+    MAINSTREAM,
     favourites,
+    for_answers,
     form,
     genre_seeds,
+    lists,
     look_alikes,
     most_listened,
     named,
+    prepare,
     read_sheet,
     render,
     seed_tracks,
@@ -23,6 +28,7 @@ from m4a_rec.questionnaire import (
     vector_lists,
 )
 from m4a_rec.rank_features import unit
+from m4a_rec.serve import NEW
 
 NOW = datetime(2020, 1, 1)
 
@@ -142,3 +148,51 @@ def test_every_form_gives_every_listener_a_full_list(service):
 
     as_seeds = genre_seeds(s, sheet, genres=2, per=3)
     assert list(as_seeds) == ["retrieval", "both"] and full(as_seeds)
+
+
+def test_prepare_knows_the_names_a_form_may_use(service):
+    o = prepare(service)
+    assert o.artists["band 3"] == [3] and len(o.artists) == len(service.titles) // 4  # four tracks an artist
+    assert o.genres == {"rock": 0, "pop": 1, "jazz": 2, "folk": 3, "hip hop": 4, "noise": 5}
+    assert o.sheet.users.len() == 0 and o.sheet.known_profile.shape == (len(service.bundle.user_ids), 6)
+    # two spellings that match once case is ignored share a name, and the name seeds both
+    titles = service.titles.with_columns(artist=pl.col("artist").replace("Band 1", "BAND 0"))
+    shared = prepare(service._replace(titles=titles))
+    assert shared.artists["band 0"] == [0, 1] and "band 1" not in shared.artists
+
+
+def test_artists_first(service):
+    s, b, o = service, service.bundle, prepare(service)
+    got = for_answers(s, o, [" BAND 3", "band 7", "Nobody", "nobody"], ["Rock"], "mainstream", 5, True, 3, 1)
+    assert got["used"] == "artists" and got["unknown_artists"] == ["Nobody", "nobody"] and got["unknown_genres"] == []
+    # what `form` measured: one seed track for each artist, then the service as for anyone new
+    picks = pl.DataFrame({"user_id": [NEW, NEW], "group": [3, 7]})
+    seeds = seed_tracks(picks, o.sheet.by_artist, 1, b.meta["now"])
+    expected = lists(s, pl.Series("user_id", [NEW]), None, seeds)["both"].sort("score", descending=True).head(5)
+    assert [r["track_id"] for r in got["recommendations"]] == expected["track_id"].to_list()
+    assert [r["rank"] for r in got["recommendations"]] == [1, 2, 3, 4, 5] and all(r["reasons"] for r in got["recommendations"])
+    # the genres and the mainstream answer are not used once an artist is known
+    alone = for_answers(s, o, ["band 3", "band 7"], [], None, 5, True, 3, 1)
+    assert alone["recommendations"] == got["recommendations"]
+
+
+def test_genres_when_no_artist_is_known(service):
+    s, b, o = service, service.bundle, prepare(service)
+    got = for_answers(s, o, ["Nobody"], ["rock", "JAZZ", "opera"], "deep cuts", 5, True, 3, 1)
+    assert got["used"] == "genres" and got["unknown_artists"] == ["Nobody"] and got["unknown_genres"] == ["opera"]
+    # what `form` measured: look-alikes among the deep-cuts third (0), the retrieval order, no ranker and so no reasons
+    answer = np.array([[1, 0, 1, 0, 0, 0]], dtype=np.float32)
+    look = look_alikes(answer, o.sheet.known_profile, b.tt_user, 3, (np.array([MAINSTREAM["deep cuts"]]), o.sheet.known_band))
+    expected = vector_lists(b, pl.Series("user_id", [NEW]), look).head(5)
+    assert [r["track_id"] for r in got["recommendations"]] == expected["track_id"].to_list()
+    assert all(r["reasons"] is None and r["retrieval_rank"] == r["rank"] and r["title"] for r in got["recommendations"])
+    plain = for_answers(s, o, [], ["rock", "jazz"], None, 5, True, 3, 1)  # without the mainstream question: every known listener counts
+    look = look_alikes(answer, o.sheet.known_profile, b.tt_user, 3)
+    assert [r["track_id"] for r in plain["recommendations"]] == vector_lists(b, pl.Series("user_id", [NEW]), look).head(5)["track_id"].to_list()
+
+
+def test_a_form_with_nothing_known_is_refused(service):
+    o = prepare(service)
+    for artists, genres in (([], []), (["Nobody"], ["opera"]), (["Nobody"], [])):
+        with pytest.raises(ValueError, match="none of the artists or genres"):
+            for_answers(service, o, artists, genres, "mainstream", 5, False, 3, 1)

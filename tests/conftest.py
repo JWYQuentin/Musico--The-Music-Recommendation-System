@@ -101,6 +101,7 @@ def served(tmp_path_factory, parts):
         "has_lyrics": (lyrics != 0).any(axis=1, keepdims=True).astype(np.float32),
         "genres": np.abs(vecs(n_tracks, 6)),
     }
+    out["genres"] = ["Rock", "Pop", "Jazz", "Folk", "Hip Hop", "Noise"]  # made up, one per genre column
     out["artist"], out["album"] = np.arange(n_tracks) // 4, np.arange(n_tracks) // 2  # four tracks an artist, two an album
     out["titles"] = pl.DataFrame(
         {"track_id": inter.track_ids, "title": [f"Song {i}" for i in range(n_tracks)], "artist": [f"Band {i // 4}" for i in range(n_tracks)]}
@@ -116,7 +117,7 @@ def write_bundle(served):
 
     def write_to(directory, ranker):
         s = served
-        write(directory, s["history"], s["dirs"]["tt"], s["dirs"]["als"], ranker, s["blocks"], s["artist"], s["album"], s["titles"], s["settings"])
+        write(directory, s["history"], s["dirs"]["tt"], s["dirs"]["als"], ranker, s["blocks"], s["artist"], s["album"], s["titles"], s["genres"], s["settings"])
         return load(directory)
 
     return write_to

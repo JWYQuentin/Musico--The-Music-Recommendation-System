@@ -12,6 +12,7 @@ Usage: python -m m4a_rec.features     # writes data/processed/features.npz
 """
 from __future__ import annotations
 
+import bz2
 import sys
 from pathlib import Path
 
@@ -41,6 +42,12 @@ def read_matrix(path: Path, track_ids: list[str]) -> np.ndarray:
     if np.isnan(out).any():
         raise ValueError(f"{path.name} has no row for {int(np.isnan(out).any(axis=1).sum())} tracks")
     return out
+
+
+def genre_names(path: Path) -> list[str]:
+    """The genre names in the header of Onion's genre TF-IDF file, in the column order read_matrix gives."""
+    with bz2.open(path, "rt", encoding="utf-8") as f:
+        return f.readline().rstrip("\r\n").split("\t")[1:]
 
 
 def zscore(x: np.ndarray, rows: np.ndarray | None = None) -> np.ndarray:

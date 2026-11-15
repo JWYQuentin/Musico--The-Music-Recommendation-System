@@ -12,6 +12,9 @@ answers become listens, each named artist's most-listened tracks played once, an
 there the service runs as for anyone new. The rows from real listens (serve.recent) are
 the listens curve's, so a form can be placed on it.
 
+`prepare` and `for_answers` put the measured paths behind the API's POST /onboarding:
+artists first, genres for someone who names no artist.
+
 It imports serve.py, so like that module it must not import torch.
 
   tune    the look-alikes' neighbour count and the tracks per artist and per genre, on
@@ -207,6 +210,70 @@ def genre_seeds(s: serve.Service, sheet: Sheet, genres: int, per: int) -> dict[s
     """`lists` for genre answers turned into listens instead: each named genre's `per` most-listened tracks."""
     picks = named(strongest(sheet.profile, genres), sheet.users)
     return lists(s, sheet.users, None, seed_tracks(picks, sheet.by_genre, per, s.bundle.meta["now"]))
+
+
+MAINSTREAM = {"deep cuts": 0, "in between": 1, "mainstream": 2}  # the mainstream question's answers, as `thirds` numbers the thirds
+
+
+class Onboarding(NamedTuple):
+    """What the API needs to answer a form: the known listeners' side of a sheet, and the names a form may use."""
+
+    sheet: Sheet  # read for no one: only known_profile, known_band and by_artist are used
+    artists: dict[str, list[int]]  # an artist's name, as `key` gives it -> its codes (two spellings may share a key)
+    genres: dict[str, int]  # a genre's name, as `key` gives it -> its column
+
+
+def key(name: str) -> str:
+    """How a name is matched: spaces at the ends dropped, case ignored."""
+    return name.strip().casefold()
+
+
+def prepare(s: serve.Service) -> Onboarding:
+    b = s.bundle
+    sheet = read_sheet(b, NO_LISTENS, pl.Series("user_id", [], dtype=pl.Int64))
+    named_as = pl.DataFrame({"track_id": b.track_ids, "code": b.artist.astype(np.int64)}).join(s.titles, on="track_id")
+    artists: dict[str, set[int]] = {}
+    for name, code in named_as.select("artist", "code").unique().drop_nulls().rows():
+        artists.setdefault(key(name), set()).add(code)
+    return Onboarding(sheet, {name: sorted(codes) for name, codes in artists.items()}, {key(g): i for i, g in enumerate(b.genres)})
+
+
+def for_answers(
+    s: serve.Service, o: Onboarding, artists: list[str], genres: list[str], mainstream: str | None, k: int, explain: bool, neighbours: int,
+    per_artist: int,
+) -> dict:
+    """Recommendations for someone with no listens, from a form: the paths `form` measured, artists first.
+
+    With an artist the catalogue knows, the artists' seed tracks go through the service as
+    someone new's listens (serve.for_history); genres and the mainstream answer are then
+    not used. Otherwise the genres go to look-alike listeners, within the mainstream third
+    when it is answered, and the list is their retrieval order, with no reasons.
+    Returns recommendations, used ("artists" or "genres"), unknown_artists and
+    unknown_genres. ValueError if no artist or genre named is known.
+    """
+    b = s.bundle
+    unknown = lambda names, known: [n for n in dict.fromkeys(names) if key(n) not in known]  # noqa: E731
+    out = {"unknown_artists": unknown(artists, o.artists), "unknown_genres": unknown(genres, o.genres)}
+    codes = sorted({code for name in artists for code in o.artists.get(key(name), [])})
+    columns = sorted({o.genres[key(name)] for name in genres if key(name) in o.genres})
+    if codes:
+        picks = pl.DataFrame({"user_id": [serve.NEW] * len(codes), "group": codes}, schema={"user_id": pl.Int64, "group": pl.Int64})
+        seeds = seed_tracks(picks, o.sheet.by_artist, per_artist, b.meta["now"])
+        recs, _ = serve.for_history(s, seeds.select("track_id", "timestamp"), k, explain)
+        return {"recommendations": recs, "used": "artists", **out}
+    if not columns:
+        raise ValueError("none of the artists or genres named is in the catalogue")
+    answer = np.zeros((1, len(b.genres)), dtype=np.float32)
+    answer[0, columns] = 1.0
+    bands = None if mainstream is None else (np.array([MAINSTREAM[mainstream]]), o.sheet.known_band)
+    look = look_alikes(answer, o.sheet.known_profile, b.tt_user, neighbours, bands)
+    found = vector_lists(b, pl.Series("user_id", [serve.NEW], dtype=pl.Int64), look).head(k)
+    found = found.join(s.titles, on="track_id", how="left", maintain_order="left")
+    recs = [
+        {"track_id": track, "rank": i + 1, "retrieval_rank": i + 1, "title": title, "artist": artist, "reasons": None}
+        for i, (track, title, artist) in enumerate(found.select("track_id", "title", "artist").rows())
+    ]
+    return {"recommendations": recs, "used": "genres", **out}
 
 
 def render(rows: dict, floor: dict, users: dict, info: dict, ks: list[int]) -> str:
