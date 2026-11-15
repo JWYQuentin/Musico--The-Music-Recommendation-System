@@ -75,6 +75,7 @@ def test_write_and_load_round_trip(bundle, served):
     assert np.array_equal(bundle.user_ids.to_numpy(), s["inter"].user_ids.to_numpy())
     assert np.array_equal(bundle.tt_track, s["tt"][1]) and np.array_equal(bundle.als_user, s["als"][0])
     assert all(np.array_equal(bundle.blocks[name], values) for name, values in s["blocks"].items())
+    assert bundle.genres == s["genres"]
     user = int(bundle.user_ids[3])
     assert listens(bundle, [user]).sort(["timestamp", "track_id"]).equals(
         s["history"].filter(pl.col("user_id") == user).sort(["timestamp", "track_id"])
@@ -85,7 +86,7 @@ def test_write_refuses_models_fitted_on_other_listens(tmp_path, served):
     s = served
     fewer = s["history"].filter(pl.col("user_id") != s["history"]["user_id"][0])
     with pytest.raises(ValueError, match="not fitted on these listens"):
-        write(tmp_path, fewer, s["dirs"]["tt"], s["dirs"]["als"], tmp_path, s["blocks"], s["artist"], s["album"], s["titles"], s["settings"])
+        write(tmp_path, fewer, s["dirs"]["tt"], s["dirs"]["als"], tmp_path, s["blocks"], s["artist"], s["album"], s["titles"], s["genres"], s["settings"])
 
 
 def test_a_known_listener_gets_their_snapshot_rows(bundle, served):
@@ -137,3 +138,9 @@ def test_features_do_not_depend_on_who_is_in_the_batch(bundle):
         batched = pl.concat([rows_for(users[i : i + 3], fold_in) for i in range(0, len(users), 3)]).sort(PAIR)
         assert whole.select(PAIR).equals(batched.select(PAIR))
         assert all(close(batched[name].to_numpy(), whole[name].to_numpy()) for name in FEATURES)
+
+
+def test_write_refuses_genre_names_that_do_not_fit_the_columns(tmp_path, served):
+    s = served
+    with pytest.raises(ValueError, match="5 genre names for 6 genre columns"):
+        write(tmp_path, s["history"], s["dirs"]["tt"], s["dirs"]["als"], tmp_path, s["blocks"], s["artist"], s["album"], s["titles"], s["genres"][:5], s["settings"])

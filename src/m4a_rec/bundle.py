@@ -2,8 +2,8 @@
 
 The bundle holds the two-tower and ALS vectors fitted on the listens it is built from,
 the saved ranker, the content features, artist and album codes, the population numbers
-of rank_features.population, the listens themselves (for the listeners the models know)
-and titles. The service reads nothing else, so the directory can be mounted into a
+of rank_features.population, the listens themselves (for the listeners the models know),
+titles, and the genre names of Onion's genre file. The service reads nothing else, so the directory can be mounted into a
 container that holds code only. It is written under data/, which git ignores: the titles
 come from Music4All and must stay on this machine.
 
@@ -37,7 +37,7 @@ import scipy.sparse as sp
 
 from .config import load_config
 from .evaluate import PAIR, TRAIN
-from .features import BLOCKS, load_blocks
+from .features import BLOCKS, genre_names, load_blocks
 from .interactions import load_train
 from .metadata import codes
 from .metadata import load as load_tracks
@@ -62,6 +62,7 @@ class Bundle(NamedTuple):
     pop: dict  # rank_features.population of the listens
     side: dict  # rank_features.scaled of the two-tower track vectors and the blocks
     history: Path  # the listens, sorted by user then time; read with `listens`
+    genres: list[str]  # the name of each column of blocks["genres"], from Onion's genre file
 
 
 def write(
@@ -74,14 +75,18 @@ def write(
     artist: np.ndarray,
     album: np.ndarray,
     titles: pl.DataFrame,
+    genres: list[str],
     settings: dict,
 ) -> None:
     """The bundle for `history`. Both models must have been fitted on exactly these listens.
 
     `blocks`, `artist`, `album` and `titles` (track_id, title, artist) are in sorted track
-    order. `settings` has n_recs, recent_days, short_days, fold_in and reasons (how many
-    the service gives per track); the rest of the meta comes from the model directories.
+    order; `genres` names the genre block's columns. `settings` has n_recs, recent_days,
+    short_days, fold_in and reasons (how many the service gives per track); the rest of the
+    meta comes from the model directories.
     """
+    if len(genres) != blocks["genres"].shape[1]:
+        raise ValueError(f"{len(genres)} genre names for {blocks['genres'].shape[1]} genre columns")
     track_ids = history["track_id"].unique().sort()
     user_ids = history["user_id"].unique().sort()
     vecs = {}
@@ -119,6 +124,7 @@ def write(
     np.savez(directory / "users.npz", user_ids=user_ids.to_numpy(), tt=vecs["tt"][0], als=vecs["als"][0])
     history.sort(["user_id", "timestamp"]).write_parquet(directory / "history.parquet", row_group_size=ROW_GROUP)
     titles.write_parquet(directory / "titles.parquet")
+    (directory / "genres.json").write_text(json.dumps(genres, indent=0) + "\n")
     (directory / "ranker").mkdir(exist_ok=True)
     for name in ("model.json", "meta.json"):
         shutil.copy(ranker / name, directory / "ranker" / name)
@@ -147,6 +153,7 @@ def load(directory: Path) -> Bundle:
         pop={"now": meta["now"], "track": track, "artist_users": t["artist_users"]},
         side=scaled(t["tt"], {name: t[f"block_{name}"] for name in BLOCKS}),
         history=directory / "history.parquet",
+        genres=json.loads((directory / "genres.json").read_text()),
     )
 
 
@@ -265,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     }
     write(
         out, history, tt, als, models / s["ranker"], load_blocks(processed / "features.npz", track_ids), *codes(tracks),
-        tracks.select("track_id", "title", "artist"), settings,
+        tracks.select("track_id", "title", "artist"), genre_names(cfg["paths"]["raw"] / cfg["feature_files"]["genres_tfidf"]), settings,
     )
     size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
     print(f"wrote {out}: {history['user_id'].n_unique():,} listeners, {len(track_ids):,} tracks, {size / 1e6:,.0f} MB")
