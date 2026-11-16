@@ -7,6 +7,13 @@ serve:
   als_model: als_refit       # saved by `candidates` for the infer snapshot
   ranker: ranker_artist
   fold_in: binary            # a new listener's two-tower vector: weights 1 (binary) or log(1 + plays); chosen on val NDCG@10 by `serve tune`
+  # A track's two-tower fold-in weight is also halved every this many places down the listener's
+  # recency order (place 1: their most recently played track). null: no recency weighting.
+  # `serve tune` picked 10 on val NDCG@10 of both stages (0.0490 against 0.0446 with none), but on
+  # test it scored 0.0299 against 0.0332 and lost recall@100 and @500 clearly, so it is not used.
+  # Kept at null after reading test: see reports/decisions.md.
+  fold_in_half_life: null
+  fold_in_half_lives: [10, 25, 50, 100, 200]   # what `serve tune` tries, with null
   max_k: 100                 # most recommendations one request may ask for
   reasons: 3                 # reasons per recommendation when asked to explain
   host: 127.0.0.1            # local only: responses carry Music4All titles

@@ -55,6 +55,11 @@ small live demo.
   favourite artists (used when any is known) or genres plus an optional mainstream answer,
   and gives exactly the lists `questionnaire.form` scored (checked on 200 held-out
   listeners for both paths). `GET /genres` lists the genre names.
+- Phase 8, step 5: recency weighting in the two-tower fold-in, tested and not used,
+  2026-11-15. A half-life of 10 tracks won on `val` (NDCG@10 0.0490 against 0.0446) but
+  not on `test` (0.0299 against 0.0332; Recall@100 and @500 clearly lower), so
+  `fold_in_half_life` stays null. Recorded in `reports/decisions.md`, decided after
+  reading `test`.
 - `pyproject.toml` lists only what the seven phases use. Add a phase's libraries there when the
   phase starts.
 
@@ -153,7 +158,7 @@ python -m m4a_rec.index data/processed/models/tt_id_refit   # index and neighbou
 python -m m4a_rec.demo               # writes data/processed/demo/index.html
 python -m m4a_rec.newcomers          # tt_id and ALS without 10% of listeners, ~30 min
 python -m m4a_rec.bundle             # the service's bundle, seconds; `bundle newcomers` for the held-out version
-python -m m4a_rec.serve tune         # the fold-in weighting on val; prints
+python -m m4a_rec.serve tune         # the fold-in weighting and its recency half-life on val; prints
 python -m m4a_rec.serve report       # parity with the saved lists, new listeners, latency; writes reports/serving.md
 python -m m4a_rec.serve curve        # new listeners served from their N most recent tracks, ~2 min; writes reports/listens_curve.md
 python -m m4a_rec.questionnaire tune     # look-alike neighbours and seed tracks per artist on val, ~2 min; prints

@@ -7,7 +7,21 @@ import pytest
 
 from m4a_rec import bundle
 from m4a_rec.rank_features import unit
-from m4a_rec.serve import NEW, curve_figure, for_history, for_user, known_share, lists_for, recent, recommend, render_curve, same_top, similar
+from m4a_rec.serve import (
+    NEW,
+    curve_figure,
+    fold_in_words,
+    for_history,
+    for_user,
+    known_share,
+    lists_for,
+    recent,
+    recommend,
+    render_curve,
+    same_top,
+    similar,
+    with_half_life,
+)
 
 
 def plays_of(s, user):
@@ -148,3 +162,16 @@ def test_curve_report_and_figure_render(tmp_path):
     assert "| all | 270 | 0.0280 | 0.0330 | 0.0200 | 0.1000 |  | 0.0% |" in md
     curve_figure(curve, floor, "test", "ndcg@10", tmp_path / "curve.png")
     assert (tmp_path / "curve.png").stat().st_size > 0
+
+
+def test_a_half_life_changes_what_someone_new_gets_and_nothing_else(service):
+    s = service
+    weighted = with_half_life(s, 2)
+    assert fold_in_words(s.bundle.meta) == "log" and fold_in_words(weighted.bundle.meta) == "log, half-life 2 tracks"
+    assert s.bundle.meta["fold_in_half_life"] is None  # the original service is left as it was
+    users = s.bundle.user_ids.head(5).to_list()
+    history = bundle.listens(s.bundle, users)
+    assert lists_for(weighted, history, users, None, 2).equals(lists_for(s, history, users, None, 2))  # learned vectors: no fold-in
+    plain, tilted = lists_for(s, history, users, "log", 2), lists_for(weighted, history, users, "log", 2)
+    assert plain.group_by("user_id").len().sort("user_id").equals(tilted.group_by("user_id").len().sort("user_id"))  # full lists either way
+    assert not plain.equals(tilted)

@@ -106,7 +106,7 @@ def served(tmp_path_factory, parts):
     out["titles"] = pl.DataFrame(
         {"track_id": inter.track_ids, "title": [f"Song {i}" for i in range(n_tracks)], "artist": [f"Band {i // 4}" for i in range(n_tracks)]}
     )
-    out["settings"] = {"n_recs": 20, "recent_days": 28, "short_days": 7, "fold_in": "log", "reasons": 3}
+    out["settings"] = {"n_recs": 20, "recent_days": 28, "short_days": 7, "fold_in": "log", "fold_in_half_life": None, "reasons": 3}
     return out
 
 

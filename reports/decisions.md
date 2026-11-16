@@ -1118,3 +1118,58 @@ spellings that match once case is ignored seed both (two such names in the catal
 Unknown names are returned in the reply, as unknown track IDs are.
 Why: a person types names; exact spelling with case would refuse most of them.
 Rejected: fuzzy matching or an artist search call, left for when a form front end exists.
+
+### Recency weighting in the fold-in (2026-11-15): tested, not used
+
+The listens curve found that for retrieval alone, a held-out listener's 100 most recent
+tracks beat their whole history (`test` NDCG@10 0.0308 against 0.0269). The question:
+does weighting recent tracks in the two-tower fold-in help the whole service, if ALS and
+the ranker's features keep the whole history?
+
+**The weighting, as built.**
+What: each distinct track gets a place in the listener's recency order by its last play
+(place 1 is the latest; tracks last played in the same second share a place, and tracks
+not in the catalogue take none). Its two-tower fold-in weight is multiplied by
+0.5 ** ((place - 1) / half_life). ALS's fold-in and the ranker's features are unchanged.
+`fold_in_half_life` in `configs/serve.yaml`; null is the fold-in as before.
+Why places, not days: the curve's finding is in tracks, and listening rates vary widely.
+Shared places keep the questionnaire's seed tracks, all played at one moment, equally
+weighted. Why two-tower only: ALS was fitted on play counts, and the ranker's features
+already describe recency in their own way.
+Rejected: cutting the history to the last N tracks, which the curve already measured
+for every stage at once.
+
+**Tuned on `val` by `serve tune`, by a rule fixed before the run.** The held-out
+listeners of the new-listener test, both stages; the highest NDCG@10 wins, a tie at four
+places going to the longer half-life.
+
+| Half-life (tracks) | none | 10 | 25 | 50 | 100 | 200 |
+|---|---|---|---|---|---|---|
+| NDCG@10, both stages | 0.0446 | 0.0490 | 0.0468 | 0.0459 | 0.0462 | 0.0458 |
+| Recall@500 (the ranker's pool) | 0.3051 | 0.2944 | 0.3148 | 0.3146 | 0.3120 | 0.3104 |
+| NDCG@10, retrieval alone | 0.0307 | 0.0377 | 0.0386 | 0.0384 | 0.0341 | 0.0319 |
+
+The rule chose 10, the shortest in the grid.
+
+**On `test` it did not hold, so the fold-in stays without recency weighting.**
+With 10, `serve report` gave, for the listeners the models never saw (`test`, 1,014):
+
+| Half-life 10 minus none | Difference (95% interval) |
+|---|---|
+| NDCG@10 | -0.0033 (-0.0082 to +0.0017) |
+| Recall@10 | +0.0004 (-0.0052 to +0.0065) |
+| Recall@100 | -0.0198 (-0.0318 to -0.0081) |
+| Recall@500 | -0.0371 (-0.0522 to -0.0221) |
+
+NDCG@10 was 0.0299 against 0.0332. The top 10 cannot be told apart, and deeper in the
+list the weighting is clearly worse. This is the listens curve's pattern again: `val` is
+the two weeks straight after the listens, where a history tilted to the last few tracks
+matches what the listener plays next; by `test`, two weeks later, it no longer does,
+and the narrower candidate pool costs recall.
+This decision was made after reading `test`: by the rule, 10 would have been used. It is
+recorded that way rather than presented as a `val` choice. No other half-life was tried
+on `test`, since any further choice would be made with `test` already seen.
+The code stays: `serve tune` prints the grid, and `serve report` adds a row and a gap for
+the fold-in without recency weighting whenever a half-life is set.
+Rejected: keeping 10 because the rule chose it, which would ship a service measurably
+worse beyond the top 10; picking a longer half-life now, on `test`'s evidence.

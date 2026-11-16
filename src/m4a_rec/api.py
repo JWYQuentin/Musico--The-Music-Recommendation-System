@@ -93,7 +93,7 @@ def create_app(s: serve.Service, max_k: int, chosen: dict) -> FastAPI:
     @app.get("/health")
     def health() -> dict:
         m = s.bundle.meta
-        return {"now": m["now"], "listeners": m["listeners"], "tracks": m["tracks"], "models": m["sources"], "fold_in": m["fold_in"]}
+        return {"now": m["now"], "listeners": m["listeners"], "tracks": m["tracks"], "models": m["sources"], "fold_in": m["fold_in"], "fold_in_half_life": m["fold_in_half_life"]}
 
     @app.get("/users/{user_id}/recommendations", response_model=Recommendations)
     def for_user(user_id: int, k: int = Query(10, ge=1, le=max_k), explain: bool = True) -> dict:

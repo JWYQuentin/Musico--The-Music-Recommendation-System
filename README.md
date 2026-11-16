@@ -196,6 +196,12 @@ in the reply.
   ([`reports/listens_curve.md`](reports/listens_curve.md)).
 
   ![NDCG@10 by how much a new listener has played](reports/figures/listens_curve.png)
+- **Weighting recent tracks in the fold-in did not survive `test`.** Halving a track's
+  weight every 10 places down a newcomer's recency order raised NDCG@10 on `val` from
+  0.0446 to 0.0490, but on `test` it gave 0.0299 against 0.0332 (interval on the gap
+  −0.0082 to +0.0017) and clearly lower Recall@100 and @500. It is not used; the
+  decision was made after reading `test` and is recorded as such
+  ([`reports/decisions.md`](reports/decisions.md)).
 - **With no listens at all, three answers are worth about one or two recent tracks.**
   The same listeners were served from nothing but the answers they would give to a short
   form, read off their own listens, so these are upper bounds on a real form. Naming

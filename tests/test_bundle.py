@@ -6,7 +6,7 @@ import polars as pl
 import pytest
 import scipy.sparse as sp
 
-from m4a_rec.bundle import candidates, fold_in_als, listens, plays_matrix, retrieve, top_unseen, vectors, write
+from m4a_rec.bundle import candidates, fold_in_als, listens, plays_matrix, recency_weights, retrieve, top_unseen, vectors, write
 from m4a_rec.candidates import snapshot
 from m4a_rec.evaluate import PAIR
 from m4a_rec.rank_features import FEATURES, unit
@@ -119,6 +119,35 @@ def test_vectors_learned_or_folded_in(bundle, served):
         assert close(tt_user, unit(bundle.tt_track[[4]]))
         played = plays_matrix(history, new, bundle.track_ids, "log")
         assert close(als_user, fold_in_als(played, bundle.als_track, 0.1, 10))
+
+
+def test_recency_weights_hand_checked():
+    at = lambda *seconds: [datetime(2020, 1, 1, 0, 0, sec) for sec in seconds]  # noqa: E731
+    # user 1 plays a, b, a, c, with a and c last played in the same second; user 2 plays x
+    history = pl.DataFrame({"user_id": [1, 1, 1, 1, 2], "track_id": ["a", "b", "a", "c", "x"], "timestamp": at(1, 2, 3, 3, 1)})
+    got = recency_weights(history, 1).sort(PAIR)
+    assert got.select(*PAIR, "place").rows() == [(1, "a", 1), (1, "b", 2), (1, "c", 1), (2, "x", 1)]  # a and c share place 1
+    assert got["w"].to_list() == [1.0, 0.5, 1.0, 1.0]  # halved once per place
+    assert recency_weights(history, 2).sort(PAIR)["w"].to_list() == pytest.approx([1.0, 0.5**0.5, 1.0, 1.0])
+
+
+def test_a_half_life_tilts_the_two_tower_fold_in_towards_recent_tracks(bundle):
+    new = pl.Series("user_id", [-1])
+    now, earlier, between = bundle.meta["now"], datetime(2000, 1, 1), datetime(2010, 1, 1)
+    # track 4 long ago, then "gone", which is not in the catalogue and so takes no place, then tracks 7 and 9 last
+    history = pl.DataFrame(
+        {"user_id": [-1] * 4, "track_id": [bundle.track_ids[4], bundle.track_ids[7], bundle.track_ids[9], "gone"], "timestamp": [earlier, now, now, between]}
+    )
+    tt_plain, als_plain = vectors(bundle, history, new, fold_in="binary")
+    weighted = bundle._replace(meta={**bundle.meta, "fold_in_half_life": 1})
+    tt_user, als_user = vectors(weighted, history, new, fold_in="binary")
+    t = unit(bundle.tt_track)
+    assert close(tt_plain, unit(t[[4]] + t[[7]] + t[[9]]))  # no half-life: every track alike
+    assert close(tt_user, unit(0.5 * t[[4]] + t[[7]] + t[[9]]))  # track 4 is at place 2, halved; with "gone" counted it would be quartered
+    assert np.array_equal(als_user, als_plain)  # ALS uses every listen as it was fitted
+    # learned vectors ignore the half-life
+    users = bundle.user_ids.gather([2])
+    assert np.array_equal(vectors(weighted, listens(bundle, [int(users[0])]), users, None)[0], bundle.tt_user[[2]])
 
 
 def test_features_do_not_depend_on_who_is_in_the_batch(bundle):
