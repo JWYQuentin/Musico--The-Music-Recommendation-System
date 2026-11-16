@@ -9,8 +9,9 @@ one up the most as reasons. api.py puts these functions behind HTTP.
 It imports ranker.py, so like that module it must not import torch; it imports nothing
 that needs faiss or implicit either, so the service's image needs none of the three.
 
-  tune    the fold-in weighting, binary or log(1 + plays), for the listeners the
-          new-listener test held out, on val. Prints; writes nothing.
+  tune    the fold-in weighting, binary or log(1 + plays), and then its recency
+          half-life, for the listeners the new-listener test held out, on val. Prints;
+          writes nothing.
   report  the service for every known listener against the saved Phase 6 lists, the
           new-listener test, and how long a request takes. Writes reports/serving.md.
   curve   the new-listener test again with each held-out listener served from only
@@ -64,6 +65,17 @@ def load(directory: Path) -> Service:
     booster, meta = load_ranker(directory / "ranker")
     titles = pl.read_parquet(directory / "titles.parquet")
     return Service(b, booster, meta, titles, {t: i for i, t in enumerate(b.track_ids.to_list())})
+
+
+def with_half_life(s: Service, half_life: float | None) -> Service:
+    """The same service with another recency half-life for the two-tower fold-in (None: no recency weighting)."""
+    return s._replace(bundle=s.bundle._replace(meta={**s.bundle.meta, "fold_in_half_life": half_life}))
+
+
+def fold_in_words(meta: dict) -> str:
+    """The fold-in setting as the reports name it, e.g. "binary" or "binary, half-life 50 tracks"."""
+    h = meta["fold_in_half_life"]
+    return meta["fold_in"] if h is None else f"{meta['fold_in']}, half-life {h:g} tracks"
 
 
 def lap(timings: dict | None, stage: str, started: float) -> float:
@@ -344,6 +356,11 @@ def render(parity: dict, newcomers: dict, gaps: dict, latency: dict, info: dict,
         "splits. Someone the models never saw gets vectors folded in from the listens they hand in:",
         f"the {info['fold_in']}-weighted average direction of their tracks' two-tower vectors, and",
         "ALS's own least-squares solve against its track vectors.",
+        *(
+            ["A half-life halves a track's two-tower weight every that many places down the listener's", "recency order (their last-played track first)."]
+            if "half-life" in info["fold_in"]
+            else []
+        ),
         "",
         "## The service gives the Phase 6 lists",
         "",
@@ -375,6 +392,11 @@ def render(parity: dict, newcomers: dict, gaps: dict, latency: dict, info: dict,
         "- learned vectors: the full models, with the vectors learned for these listeners (what they get as known listeners)",
         "- fold-in, full models: the full models, with vectors folded in from their listens instead",
         "- fold-in, never seen, retrieval only: the models fitted without them, the two-tower order alone",
+        *(
+            ["- fold-in, never seen, no recency weighting: the same as the next row, with every track weighted alike"]
+            if "fold-in, never seen, no recency weighting" in newcomers["rows"]
+            else []
+        ),
         "- fold-in, never seen: the models fitted without them, both stages: what someone new gets",
         "",
         "The ranker is the saved one. It was trained on a snapshot that held these listeners' earlier listens",
@@ -420,11 +442,19 @@ def main(argv: list[str] | None = None) -> int:
     mean = lambda users: {m: float(users[m].mean()) for m in metrics}  # noqa: E731
 
     if argv == ["tune"]:
+        on_val = lambda s, fold_in, stages: mean(per_user(lists_for(s, theirs, held, fold_in, c["batch_users"], stages), "val", held, ks[0]))  # noqa: E731
+        plain = with_half_life(new, None)
         rows = []
         for fold_in in FOLD_INS:
             say(f"fold-in {fold_in}")
-            rows.append([fold_in, *mean(per_user(lists_for(new, theirs, held, fold_in, c["batch_users"]), "val", held, ks[0])).values()])
+            rows.append([fold_in, *on_val(plain, fold_in, "both").values()])
         say("\n".join(table(["fold-in", *metrics], rows)))
+        rows = []
+        for half_life in [None, *c["fold_in_half_lives"]]:
+            say(f"half-life {half_life}")
+            s = with_half_life(new, half_life)
+            rows.append([str(half_life), *on_val(s, c["fold_in"], "both").values(), on_val(s, c["fold_in"], "retrieval")[metrics[0]]])
+        say("\n".join(table([f"half-life ({c['fold_in']})", *metrics, f"{metrics[0]}, retrieval alone"], rows)))
         return 0
 
     if argv == ["curve"]:
@@ -451,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
         popular = pl.read_parquet(processed / "recs" / "popularity.parquet").filter(pl.col("user_id").is_in(held))
         floor = {split: mean(per_user(popular, split, held, ks[0])) for split in splits}
         users = {"held_out": len(held), **{split: full[split].height for split in splits}}
-        info = {"fold_in": fold_in, "ranker": c["ranker"], "n_boot": boot["n"]}
+        info = {"fold_in": fold_in_words(new.bundle.meta), "ranker": c["ranker"], "n_boot": boot["n"]}
         curve_figure(curve, floor, "test", metrics[0], reports / "figures" / "listens_curve.png")
         (reports / "listens_curve.json").write_text(stable_json({"users": users, "popularity": floor, "curve": curve}))
         (reports / "listens_curve.md").write_text(render_curve(curve, floor, users, info, ks))
@@ -478,6 +508,11 @@ def main(argv: list[str] | None = None) -> int:
         "fold-in, never seen, retrieval only": lists_for(new, theirs, held, new.bundle.meta["fold_in"], c["batch_users"], "retrieval"),
         "fold-in, never seen": lists_for(new, theirs, held, new.bundle.meta["fold_in"], c["batch_users"]),
     }
+    weighted = new.bundle.meta["fold_in_half_life"] is not None
+    if weighted:  # the same without recency weighting, before the last row
+        last = lists.pop("fold-in, never seen")
+        lists["fold-in, never seen, no recency weighting"] = lists_for(with_half_life(new, None), theirs, held, new.bundle.meta["fold_in"], c["batch_users"])
+        lists["fold-in, never seen"] = last
     users = {name: {split: per_user(recs, split, held, ks[0]) for split in ("val", "test")} for name, recs in lists.items()}
     newcomers = {
         "users": {"held_out": len(held), **{split: users["popularity"][split].height for split in ("val", "test")}},
@@ -486,8 +521,8 @@ def main(argv: list[str] | None = None) -> int:
     boot = cfg["bootstrap"]
     final = users["fold-in, never seen"]["test"]
     gaps = {
-        f"never seen minus {other}": paired_difference(final, users[other]["test"], metrics, boot["n"], boot["seed"])
-        for other in ("learned vectors", "popularity")
+        f"never seen minus {other.removeprefix('fold-in, never seen, ')}": paired_difference(final, users[other]["test"], metrics, boot["n"], boot["seed"])
+        for other in ("learned vectors", "popularity", *(["fold-in, never seen, no recency weighting"] if weighted else []))
     }
 
     say("timing single requests")
@@ -495,7 +530,7 @@ def main(argv: list[str] | None = None) -> int:
     latency = {"requests": c["latency_users"], "k": ks[0], **timed(s, sample.tolist(), history, ks[0])}
 
     info = {
-        "fold_in": s.bundle.meta["fold_in"],
+        "fold_in": fold_in_words(s.bundle.meta),
         "ranker": c["ranker"],
         "fraction": n["fraction"],
         "seed": n["seed"],

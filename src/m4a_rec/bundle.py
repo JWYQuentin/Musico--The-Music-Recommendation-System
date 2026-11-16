@@ -49,7 +49,7 @@ ROW_GROUP = 100_000  # listens per row group of history.parquet, so one listener
 
 
 class Bundle(NamedTuple):
-    meta: dict  # now, n_recs, n_candidates, recent_days, short_days, als settings, fold_in, reasons, sources
+    meta: dict  # now, n_recs, n_candidates, recent_days, short_days, als settings, fold_in, fold_in_half_life, reasons, sources
     track_ids: pl.Series  # sorted; the row order of every per-track array
     user_ids: pl.Series  # sorted; the listeners with learned vectors
     tt_track: np.ndarray
@@ -82,8 +82,8 @@ def write(
 
     `blocks`, `artist`, `album` and `titles` (track_id, title, artist) are in sorted track
     order; `genres` names the genre block's columns. `settings` has n_recs, recent_days,
-    short_days, fold_in and reasons (how many the service gives per track); the rest of the
-    meta comes from the model directories.
+    short_days, fold_in, fold_in_half_life and reasons (how many the service gives per
+    track); the rest of the meta comes from the model directories.
     """
     if len(genres) != blocks["genres"].shape[1]:
         raise ValueError(f"{len(genres)} genre names for {blocks['genres'].shape[1]} genre columns")
@@ -169,6 +169,18 @@ def plays_matrix(history: pl.DataFrame, user_ids: pl.Series, track_ids: pl.Serie
     return pair_matrix(plays.with_columns(w=weight), user_ids, track_ids, values="w")
 
 
+def recency_weights(history: pl.DataFrame, half_life: float) -> pl.DataFrame:
+    """Each (user, track) pair's weight by its place in the user's recency order: user_id, track_id, place, w.
+
+    Place 1 is the track the user played last; tracks last played in the same second share
+    a place, and the next place follows on (1, 1, 2). The weight halves every `half_life`
+    places: 0.5 ** ((place - 1) / half_life).
+    """
+    last = history.group_by(PAIR).agg(last=pl.col("timestamp").max())
+    placed = last.with_columns(place=pl.col("last").rank("dense", descending=True).over("user_id").cast(pl.Int64))
+    return placed.select(*PAIR, "place", w=0.5 ** ((pl.col("place") - 1) / half_life))
+
+
 def fold_in_als(played: sp.csr_matrix, track_vecs: np.ndarray, regularization: float, alpha: float) -> np.ndarray:
     """ALS vectors for listeners the fit never saw: each one's exact least-squares solve against the fitted track vectors.
 
@@ -192,7 +204,8 @@ def vectors(b: Bundle, history: pl.DataFrame, user_ids: pl.Series, fold_in: str 
     With `fold_in` None, the learned ones (every listener must be in the bundle). With
     "binary" or "log", folded in from their listens in `history`: the two-tower vector is
     the direction of the weighted average of their tracks' vectors, the ALS vector the
-    solve in fold_in_als.
+    solve in fold_in_als. With the meta's fold_in_half_life set, the two-tower weights are
+    also multiplied by recency_weights; ALS always uses every listen as it was fitted.
     """
     if fold_in is None:
         rows = np.searchsorted(b.user_ids.to_numpy(), user_ids.to_numpy())
@@ -200,7 +213,12 @@ def vectors(b: Bundle, history: pl.DataFrame, user_ids: pl.Series, fold_in: str 
             raise ValueError("a listener has no learned vectors")
         return b.tt_user[rows], b.als_user[rows]
     als = b.meta["als"]
-    tt = mean_direction(plays_matrix(history, user_ids, b.track_ids, fold_in), b.tt_track)
+    weights = plays_matrix(history, user_ids, b.track_ids, fold_in)
+    if b.meta["fold_in_half_life"] is not None:
+        known = history.filter(pl.col("track_id").is_in(b.track_ids.implode()))  # places count only tracks with a vector
+        recency = pair_matrix(recency_weights(known, b.meta["fold_in_half_life"]), user_ids, b.track_ids, values="w")
+        weights = weights.multiply(recency).tocsr()
+    tt = mean_direction(weights, b.tt_track)
     played = plays_matrix(history, user_ids, b.track_ids, als["weighting"])
     return tt, fold_in_als(played, b.als_track, als["regularization"], als["alpha"])
 
@@ -268,7 +286,8 @@ def main(argv: list[str] | None = None) -> int:
     track_ids = history["track_id"].unique().sort().to_list()
     tracks = load_tracks(processed / "tracks.parquet", track_ids)
     settings = {
-        "n_recs": r["n_recs"], "recent_days": r["recent_days"], "short_days": r["short_days"], "fold_in": s["fold_in"], "reasons": s["reasons"]
+        "n_recs": r["n_recs"], "recent_days": r["recent_days"], "short_days": r["short_days"], "fold_in": s["fold_in"],
+        "fold_in_half_life": s["fold_in_half_life"], "reasons": s["reasons"],
     }
     write(
         out, history, tt, als, models / s["ranker"], load_blocks(processed / "features.npz", track_ids), *codes(tracks),
