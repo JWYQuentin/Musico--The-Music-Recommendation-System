@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Musico results</title>
+<meta name="description" content="Results of a two-stage music recommender on Music4All-Onion: model comparison, new listeners, fairness and serving. Totals only.">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --wash: rgba(11,11,11,0.04);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
+  --base: #b5b4ad;      /* de-emphasised marks: baselines, the reference series */
+  --link: #1c5cab;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+    --base: #5f5e59; --link: #86b6ef;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.05);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+  --base: #5f5e59; --link: #86b6ef;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main { max-width: 880px; margin: 0 auto; padding: 40px 16px 64px; }
+h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 21px; margin: 56px 0 6px; letter-spacing: -0.005em; }
+h3 { font-size: 15px; margin: 28px 0 4px; }
+p { margin: 8px 0; color: var(--ink-2); max-width: 68ch; }
+p.lead { font-size: 17px; color: var(--ink); }
+a { color: var(--link); }
+code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.byline { color: var(--muted); font-size: 14px; margin-bottom: 20px; }
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 16px; margin: 14px 0;
+}
+.note { font-size: 13px; color: var(--muted); margin-top: 10px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 22px 0; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.tile .label { font-size: 13px; color: var(--ink-2); }
+.tile .value { font-size: 26px; font-weight: 600; margin: 2px 0; }
+.tile .sub { font-size: 13px; color: var(--muted); }
+.pipeline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 4px; }
+.pipeline .step { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 14px; }
+.pipeline .step small { display: block; color: var(--muted); font-size: 12px; }
+.pipeline .arrow { color: var(--muted); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 4px 0 12px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button {
+  font: inherit; font-size: 13px; padding: 5px 11px; border: 0; background: transparent; color: var(--ink-2);
+  cursor: pointer; min-height: 32px;
+}
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.seg button:focus-visible, select:focus-visible { outline: 2px solid var(--s1); outline-offset: 1px; }
+.ctl-label { font-size: 13px; color: var(--muted); margin-right: 6px; }
+select {
+  font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--ink); min-height: 32px; max-width: 100%;
+}
+.sticky { position: sticky; top: 0; z-index: 5; background: var(--page); padding: 8px 0; border-bottom: 1px solid var(--border); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--ink-2); margin: 0 0 10px; }
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+.legend .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.legend .ln { width: 16px; height: 2px; display: inline-block; border-radius: 1px; }
+.legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.rows .row { padding: 3px 0; border-radius: 6px; }
+.rows .row:hover { background: var(--wash); }
+.rows .rl { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.rows .rl .name { color: var(--ink); }
+.rows .rl .v { color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rows svg { display: block; width: 100%; height: 14px; overflow: visible; }
+.rows .axis svg { height: 18px; }
+.axis text, svg text.tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+svg .grid { stroke: var(--grid); stroke-width: 1; }
+svg .zero { stroke: var(--axis); stroke-width: 1; }
+svg .ref { stroke: var(--muted); stroke-width: 1; }
+svg text.reflabel { fill: var(--ink-2); font-size: 11px; }
+svg text.ptlabel { fill: var(--ink-2); font-size: 11px; }
+svg text.ptlabel, svg text.reflabel { paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
+.chart svg { display: block; width: 100%; }
+details { margin-top: 10px; font-size: 13px; color: var(--ink-2); }
+summary { cursor: pointer; color: var(--muted); }
+table { border-collapse: collapse; margin-top: 8px; font-variant-numeric: tabular-nums; width: 100%; }
+th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--grid); }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--muted); font-weight: 500; }
+.tablewrap { overflow-x: auto; }
+#tip {
+  position: fixed; pointer-events: none; z-index: 10; display: none; max-width: 280px;
+  background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12); padding: 8px 10px; font-size: 13px; line-height: 1.4;
+}
+#tip .t { font-weight: 600; margin-bottom: 2px; }
+#tip .r { display: flex; justify-content: space-between; gap: 12px; color: var(--ink-2); }
+#tip .r b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 13px; color: var(--ink-2); }
+footer blockquote { margin: 8px 0 14px; padding-left: 12px; border-left: 2px solid var(--grid); color: var(--ink-2); }
+@media (max-width: 560px) { #split-note { display: none; } h1 { font-size: 25px; } }
+@media (max-height: 560px) { .sticky { position: static; } }
+ul { padding-left: 20px; color: var(--ink-2); }
+li { margin: 4px 0; max-width: 68ch; }
+</style>
+</head>
+<body>
+<div id="tip" role="status"></div>
+<main>
+  <h1>Musico: a two-stage music recommender</h1>
+  <div class="byline">By Zunhong (Quentin) Mei · <a href="https://github.com/JWYQuentin/Musico--The-Music-Recommendation-System">code and full write-up on GitHub</a></div>
+  <p class="lead">A two-tower neural network picks 1,000 candidate tracks for each listener and a gradient-boosted ranker reorders the best 500. It was trained on 13 months of Last.fm listening and scored on the two weeks that followed.</p>
+  <p>Every number on this page is a total over thousands of listeners, read from the project's reports. The page shows no track titles, artists or individual listeners: titles and artists come from a dataset that is shared for research only.</p>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="pipeline" aria-label="How a recommendation is made">
+    <div class="step">Listening history</div><span class="arrow">→</span>
+    <div class="step">Two-tower retrieval<small>1,000 candidates</small></div><span class="arrow">→</span>
+    <div class="step">XGBoost ranker<small>25 features, best 500 reordered</small></div><span class="arrow">→</span>
+    <div class="step">Top 10</div>
+  </div>
+
+  <div class="sticky">
+    <div class="controls" style="margin:0">
+      <span><span class="ctl-label">Scored on</span><span class="seg" id="split"></span></span>
+      <span class="note" style="margin:0" id="split-note"></span>
+    </div>
+  </div>
+
+  <section>
+    <h2>How the models compare</h2>
+    <p>A model is scored on the tracks each listener plays for the first time in the scoring period. Recall@K is the share of those tracks in the model's top K; NDCG@K also rewards placing them near the top. Every model is fitted on the same data.</p>
+    <div class="card">
+      <div class="controls">
+        <span><span class="ctl-label">Metric</span><span class="seg" id="metric"></span></span>
+        <span><span class="ctl-label">K</span><span class="seg" id="k"></span></span>
+      </div>
+      <div class="rows" id="models"></div>
+    </div>
+    <h3>What each stage adds</h3>
+    <p>The gain from each step, with a 95% interval from resampling listeners. An interval that stays clear of zero is a real gain on this data.</p>
+    <div class="card"><div class="rows" id="gaps"></div>
+      <div class="note">At K = 500 the rankers only reorder the same 500 candidates, so recall there cannot change.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What the ranker relies on</h2>
+    <p>Mean absolute SHAP value per feature over the ranker's candidates: how far each feature moves a candidate's score, on average. What the listener has already played by the same artist matters most.</p>
+    <div class="card"><div class="legend" id="shap-legend"></div><div class="rows" id="shap"></div></div>
+  </section>
+
+  <section>
+    <h2>Listeners it has never seen</h2>
+    <p>One listener in ten was left out of training. They are served from the listens they hand in, cut to their N most recent tracks, and compared with the same listeners scored with vectors learned in training.</p>
+    <div class="card">
+      <div class="controls"><span><span class="ctl-label">Metric</span><span class="seg" id="new-metric"></span></span></div>
+      <div class="legend" id="curve-legend"></div>
+      <div class="chart" id="curve"></div>
+      <details><summary>Show as a table</summary><div class="tablewrap" id="curve-table"></div></details>
+    </div>
+    <h3>From a short form instead of listens</h3>
+    <p>The same listeners served from answers they could give in a sign-up form: favourite genres, how mainstream they are, favourite artists. The answers are read off their own listening, so these are upper bounds. Genre answers go through retrieval only; artists and listens go through both stages.</p>
+    <div class="card"><div class="legend" id="forms-legend"></div><div class="rows" id="forms"></div></div>
+  </section>
+
+  <section>
+    <h2>Tracks nobody has played</h2>
+    <p>A version of the retrieval model reads only a track's audio, lyrics and genres, so it can place a track with no listens. Here some tracks were removed from training entirely, and models are scored as if those were the only tracks in the catalogue.</p>
+    <div class="card">
+      <div class="controls"><span><span class="ctl-label">Metric</span><span class="seg" id="cold-metric"></span></span></div>
+      <div class="rows" id="cold"></div>
+      <div class="note" id="cold-note"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Who the system serves</h2>
+    <p>Measured on each listener's top 10 in the <span class="bias-split"></span> period. Tracks are cut into head, middle and tail so that each third holds a third of all training listening. A model is fair to a group when its share of slots is close to the group's share of what listeners went on to discover.</p>
+    <div class="controls"><label><span class="ctl-label">Model</span><select id="bias-model"></select></label></div>
+    <div class="card">
+      <h3 style="margin-top:0">Popular and obscure tracks</h3>
+      <div class="legend" id="pop-legend"></div><div class="rows" id="pop"></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">Genres</h3>
+      <div class="legend" id="genre-legend"></div><div class="rows" id="genres"></div>
+      <div class="note">Each track gets one broad genre group from its first-listed genre label, by keyword rules; some calls are debatable.</div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">NDCG@10 by kind of listener</h3>
+      <div class="rows" id="listeners"></div>
+      <h3>NDCG@10 by a listener's main genre</h3>
+      <div class="rows" id="listener-genres"></div>
+      <div class="note">Overlapping intervals mean the gap between groups is not established.</div>
+    </div>
+    <h3>The popularity penalty and its price</h3>
+    <p>Marking popular candidates down at ranking time moves slots towards the tail, and every step costs accuracy. Its strength λ was picked on <code>val</code> by a rule fixed in advance: the largest that costs under 2% of NDCG@10.</p>
+    <div class="card">
+      <div class="legend" id="penalty-legend"></div>
+      <div class="chart" id="penalty"></div>
+      <details><summary>Show as a table</summary><div class="tablewrap" id="penalty-table"></div></details>
+    </div>
+  </section>
+
+  <section>
+    <h2>Serving it</h2>
+    <p>The models run as a local API. For every known listener it gives the same top 10 as the offline pipeline. For someone new it folds a vector in from the listens they hand in. Times are for one request on one machine, measured over <span id="requests"></span> requests.</p>
+    <div class="tiles" id="serve-tiles"></div>
+    <div class="card"><div class="tablewrap" id="stages"></div></div>
+  </section>
+
+  <section>
+    <h2>Limits</h2>
+    <ul>
+      <li>Offline evaluation only. A listener playing a track is taken as wanting it: there are no skips, likes or play lengths, and no way to test what a listener would have done with a different list.</li>
+      <li>Two weeks of <code>test</code>, one dataset. Settings were picked on <code>val</code>, where gains were about twice what <code>test</code> confirmed, so every claim is checked on <code>test</code> with an interval.</li>
+      <li>Bias is measured against what listeners went on to play, which was itself shaped by whatever was recommending music to them at the time.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>Code under the MIT licence. Listening data and content features: Music4All-Onion, Zenodo record 6609677, <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>.</p>
+    <blockquote>Marta Moscati, Emilia Parada-Cabaleiro, Yashar Deldjoo, Eva Zangerle and Markus Schedl. Music4All-Onion: A Large-Scale Multi-faceted Content-Centric Music Recommendation Dataset. CIKM 2022.</blockquote>
+    <p>Track artists and genre labels behind the artist features and genre groups: the Music4All database, used under its agreement for research purposes only and not included here.</p>
+    <blockquote>Igor André Pegoraro Santana, Fabio Pinhelli, Juliano Donini, Leonardo Catharin, Rafael Biazus Mangolin, Yandre Maldonado e Gomes da Costa, Valéria Delisandra Feltrim and Marcos Aurélio Domingues. Music4All: A New Music Database and its Applications. In: 27th International Conference on Systems, Signals and Image Processing (IWSSIP 2020), 2020, Niterói, Brazil. p. 399-404.</blockquote>
+    <p>Generated by <code>python -m m4a_rec.results_page</code> from the reports in the repository.</p>
+  </footer>
+</main>
+
+<script>
+const D = {"results":{"users":{"val":10423,"test":10280},"ks":[10,20,100,500],"models":[{"key":"popularity","label":"Popularity","val":{"ndcg@10":0.0062947844,"recall@10":0.0046163378,"ndcg@20":0.0070416435,"recall@20":0.0080392576,"ndcg@100":0.0144144056,"recall@100":0.0308266888,"ndcg@500":0.031288692,"recall@500":0.0951493729},"test":{"ndcg@10":0.006050098,"recall@10":0.0041812437,"ndcg@20":0.0065364099,"recall@20":0.0070254558,"ndcg@100":0.0137858386,"recall@100":0.0291692856,"ndcg@500":0.0311675961,"recall@500":0.095002928}},{"key":"item_knn","label":"Item-kNN","val":{"ndcg@10":0.0274672902,"recall@10":0.0222967701,"ndcg@20":0.03114916,"recall@20":0.037681567,"ndcg@100":0.0553792258,"recall@100":0.1123119408,"ndcg@500":0.1017019434,"recall@500":0.29170727},"test":{"ndcg@10":0.0276148491,"recall@10":0.0207908005,"ndcg@20":0.0311402698,"recall@20":0.0369131767,"ndcg@100":0.0539716041,"recall@100":0.1088371587,"ndcg@500":0.0993509671,"recall@500":0.2840770353}},{"key":"als","label":"ALS","val":{"ndcg@10":0.0288002499,"recall@10":0.0251397161,"ndcg@20":0.033951177,"recall@20":0.0434776007,"ndcg@100":0.0649043382,"recall@100":0.1393699357,"ndcg@500":0.1189890245,"recall@500":0.3506711453},"test":{"ndcg@10":0.0283915625,"recall@10":0.0243636314,"ndcg@20":0.0332775884,"recall@20":0.0426784933,"ndcg@100":0.0632069643,"recall@100":0.1356204661,"ndcg@500":0.1167307959,"recall@500":0.3433965839}},{"key":"tt_id","label":"Two-tower","val":{"ndcg@10":0.0348676063,"recall@10":0.0296698695,"ndcg@20":0.040476697,"recall@20":0.0508792107,"ndcg@100":0.0725809665,"recall@100":0.1510068995,"ndcg@500":0.1276411603,"recall@500":0.3638987315},"test":{"ndcg@10":0.0324797117,"recall@10":0.0278350823,"ndcg@20":0.0373492971,"recall@20":0.0470406143,"ndcg@100":0.0693089775,"recall@100":0.1467798833,"ndcg@500":0.1243569936,"recall@500":0.3579416793}},{"key":"tt_id + ranker","label":"Two-tower + ranker","val":{"ndcg@10":0.0394669091,"recall@10":0.0339771488,"ndcg@20":0.0451902298,"recall@20":0.0569267904,"ndcg@100":0.0775469696,"recall@100":0.1579592035,"ndcg@500":0.1312766698,"recall@500":0.3638987315},"test":{"ndcg@10":0.0347550783,"recall@10":0.0309926829,"ndcg@20":0.0400937839,"recall@20":0.0512754189,"ndcg@100":0.0718535515,"recall@100":0.1508129573,"ndcg@500":0.1263508482,"recall@500":0.3579416793}},{"key":"tt_id + ranker_artist","label":"Two-tower + ranker with artist features","val":{"ndcg@10":0.044871269,"recall@10":0.0396919866,"ndcg@20":0.0510859959,"recall@20":0.0633181975,"ndcg@100":0.0860345089,"recall@100":0.1730112109,"ndcg@500":0.1365823414,"recall@500":0.3638987315},"test":{"ndcg@10":0.0368457443,"recall@10":0.0338427969,"ndcg@20":0.042956693,"recall@20":0.0562344489,"ndcg@100":0.0767775266,"recall@100":0.1610269006,"ndcg@500":0.1293016628,"recall@500":0.3579416793}}],"gaps":[{"model":"Two-tower + ranker","against":"Two-tower","val":{"ndcg@10":{"diff":0.0045993028,"low":0.0033337173,"high":0.0058889406},"recall@10":{"diff":0.0043072793,"low":0.002712295,"high":0.0057519543},"ndcg@20":{"diff":0.0047135328,"low":0.0035187358,"high":0.0059308052},"recall@20":{"diff":0.0060475797,"low":0.0039423838,"high":0.0080598249},"ndcg@100":{"diff":0.0049660031,"low":0.0038648274,"high":0.0061115676},"recall@100":{"diff":0.006952304,"low":0.0042813213,"high":0.0094940121},"ndcg@500":{"diff":0.0036355095,"low":0.0027575992,"high":0.0045131788},"recall@500":{"diff":0.0,"low":0.0,"high":0.0}},"test":{"ndcg@10":{"diff":0.0022753665,"low":0.0010405184,"high":0.0035033515},"recall@10":{"diff":0.0031576006,"low":0.0016224342,"high":0.0046345371},"ndcg@20":{"diff":0.0027444869,"low":0.0015615158,"high":0.0038663939},"recall@20":{"diff":0.0042348046,"low":0.0023633524,"high":0.0060715124},"ndcg@100":{"diff":0.002544574,"low":0.0014965163,"high":0.0036199825},"recall@100":{"diff":0.004033074,"low":0.0014901807,"high":0.0065993553},"ndcg@500":{"diff":0.0019938546,"low":0.0011605293,"high":0.002844671},"recall@500":{"diff":0.0,"low":0.0,"high":0.0}}},{"model":"Two-tower + ranker with artist features","against":"Two-tower","val":{"ndcg@10":{"diff":0.0100036627,"low":0.0081161966,"high":0.0117590197},"recall@10":{"diff":0.0100221171,"low":0.0080595042,"high":0.0119206705},"ndcg@20":{"diff":0.0106092989,"low":0.0088749796,"high":0.0122702613},"recall@20":{"diff":0.0124389868,"low":0.0100831271,"high":0.0149155868},"ndcg@100":{"diff":0.0134535424,"low":0.0118565902,"high":0.0149923856},"recall@100":{"diff":0.0220043114,"low":0.0190303041,"high":0.0250966824},"ndcg@500":{"diff":0.0089411811,"low":0.0076500742,"high":0.0101803503},"recall@500":{"diff":0.0,"low":0.0,"high":0.0}},"test":{"ndcg@10":{"diff":0.0043660326,"low":0.0026706797,"high":0.0060307252},"recall@10":{"diff":0.0060077146,"low":0.0040679512,"high":0.0079217005},"ndcg@20":{"diff":0.005607396,"low":0.0039756126,"high":0.0071642116},"recall@20":{"diff":0.0091938346,"low":0.0067600757,"high":0.0114200425},"ndcg@100":{"diff":0.0074685491,"low":0.0059830417,"high":0.0089169209},"recall@100":{"diff":0.0142470173,"low":0.0112942135,"high":0.0170910253},"ndcg@500":{"diff":0.0049446692,"low":0.0037774273,"high":0.0060633323},"recall@500":{"diff":0.0,"low":0.0,"high":0.0}}},{"model":"Two-tower + ranker with artist features","against":"Two-tower + ranker","val":{"ndcg@10":{"diff":0.0054043599,"low":0.0037984939,"high":0.0069863046},"recall@10":{"diff":0.0057148378,"low":0.0040153977,"high":0.0075305787},"ndcg@20":{"diff":0.0058957661,"low":0.0045091606,"high":0.0073215654},"recall@20":{"diff":0.0063914072,"low":0.0044412524,"high":0.0083923506},"ndcg@100":{"diff":0.0084875394,"low":0.0071979989,"high":0.0098197566},"recall@100":{"diff":0.0150520074,"low":0.0123872091,"high":0.0176761146},"ndcg@500":{"diff":0.0053056716,"low":0.0042847995,"high":0.0063374736},"recall@500":{"diff":0.0,"low":0.0,"high":0.0}},"test":{"ndcg@10":{"diff":0.002090666,"low":0.0006357117,"high":0.0035955241},"recall@10":{"diff":0.002850114,"low":0.0010875583,"high":0.0045895699},"ndcg@20":{"diff":0.0028629091,"low":0.0015534106,"high":0.0041616381},"recall@20":{"diff":0.00495903,"low":0.0028185051,"high":0.0070422309},"ndcg@100":{"diff":0.0049239751,"low":0.0037508641,"high":0.0060990358},"recall@100":{"diff":0.0102139433,"low":0.0078503595,"high":0.0126949258},"ndcg@500":{"diff":0.0029508146,"low":0.0019729295,"high":0.0039286715},"recall@500":{"diff":0.0,"low":0.0,"high":0.0}}}],"shap":[{"feature":"artist_listeners","group":"artist","label":"Artist's listeners","value":0.1984850913},{"feature":"artist_days_since","group":"artist","label":"Days since the listener last played this artist","value":0.1867298782},{"feature":"tt_z","group":"models","label":"Two-tower score against the listener's other candidates","value":0.1309586167},{"feature":"tt_rank","group":"models","label":"Two-tower rank among the listener's candidates","value":0.1255034953},{"feature":"album_tracks","group":"artist","label":"Listener's tracks from this album","value":0.1217919514},{"feature":"recent_affinity","group":"listener and track","label":"Closeness to what the listener played recently","value":0.1197314933},{"feature":"track_recent_share","group":"track","label":"Share of the track's listeners who are recent","value":0.1024520248},{"feature":"als_rank","group":"models","label":"ALS rank among the listener's candidates","value":0.0844156146},{"feature":"artist_catalog_share","group":"artist","label":"Share of the artist's tracks the listener has played","value":0.0612051412},{"feature":"track_listeners_recent","group":"track","label":"Track's listeners in recent weeks","value":0.0516490787},{"feature":"als_z","group":"models","label":"ALS score against the listener's other candidates","value":0.0472287945},{"feature":"sim_genres","group":"listener and track","label":"Genres match what the listener plays","value":0.0292796046},{"feature":"pop_gap","group":"listener and track","label":"More or less popular than the listener's usual","value":0.0225930978},{"feature":"track_listeners_short","group":"track","label":"Track's listeners in the last days","value":0.0199910309},{"feature":"artist_tracks","group":"artist","label":"Listener's tracks by this artist","value":0.0197645742},{"feature":"track_listeners","group":"track","label":"Track's listeners in all","value":0.0110867312},{"feature":"artist_play_share","group":"artist","label":"Share of the listener's plays by this artist","value":0.0106190946},{"feature":"track_discovery_rate","group":"track","label":"Share of recent listeners hearing it for the first time","value":0.0071243062},{"feature":"sim_lyrics","group":"listener and track","label":"Lyrics close to what the listener plays","value":0.0051471293},{"feature":"user_plays_recent","group":"listener","label":"Listener's recent plays","value":0.0032909247},{"feature":"user_tracks","group":"listener","label":"Listener's tracks played","value":0.0025617611},{"feature":"user_mainstream","group":"listener","label":"How mainstream the listener is","value":0.0019939998},{"feature":"user_new_share","group":"listener","label":"Share of the listener's plays that are new tracks","value":0.0018548365},{"feature":"sim_audio","group":"listener and track","label":"Sounds like what the listener plays","value":0.0015630947},{"feature":"user_days_since_last","group":"listener","label":"Days since the listener last played","value":0.0008970586}]},"newcomers":{"users":{"held_out":1435,"val":1038,"test":1014},"popularity":{"val":{"ndcg@10":0.0061128355,"recall@10":0.0044058913,"recall@100":0.0306001127,"recall@500":0.0958857034},"test":{"ndcg@10":0.0062692058,"recall@10":0.0049648874,"recall@100":0.0266177732,"recall@500":0.0869781509}},"learned":{"val":{"ndcg@10":0.0486382265,"recall@10":0.041248729,"recall@100":0.1812525433,"recall@500":0.3672651421},"test":{"ndcg@10":0.035114315,"recall@10":0.0311999153,"recall@100":0.1684734629,"recall@500":0.3618869778}},"curve":[{"tracks":"1","retrieval":{"val":{"ndcg@10":0.0273714512,"recall@10":0.0186729794,"recall@100":0.0625558845,"recall@500":0.146312866},"test":{"ndcg@10":0.0144918643,"recall@10":0.0132458444,"recall@100":0.0465490719,"recall@500":0.121940997}},"both":{"val":{"ndcg@10":0.0280173512,"recall@10":0.0209242044,"recall@100":0.0633206881,"recall@500":0.146312866},"test":{"ndcg@10":0.0157103799,"recall@10":0.0146728126,"recall@100":0.0474546058,"recall@500":0.121940997}}},{"tracks":"2","retrieval":{"val":{"ndcg@10":0.0276148837,"recall@10":0.0189114714,"recall@100":0.0706291161,"recall@500":0.1819080907},"test":{"ndcg@10":0.0193127479,"recall@10":0.0181762706,"recall@100":0.0648672793,"recall@500":0.1641654815}},"both":{"val":{"ndcg@10":0.0315223535,"recall@10":0.022493119,"recall@100":0.070426536,"recall@500":0.1819080907},"test":{"ndcg@10":0.0196069515,"recall@10":0.018456052,"recall@100":0.0631277223,"recall@500":0.1641654815}}},{"tracks":"3","retrieval":{"val":{"ndcg@10":0.0317897564,"recall@10":0.0212079131,"recall@100":0.0812852004,"recall@500":0.2031438145},"test":{"ndcg@10":0.0216294661,"recall@10":0.0200097095,"recall@100":0.0720779852,"recall@500":0.1809061824}},"both":{"val":{"ndcg@10":0.0350705068,"recall@10":0.0246245994,"recall@100":0.085914474,"recall@500":0.2031438145},"test":{"ndcg@10":0.0223415881,"recall@10":0.0186403333,"recall@100":0.0721394142,"recall@500":0.1809061824}}},{"tracks":"5","retrieval":{"val":{"ndcg@10":0.0334182944,"recall@10":0.0241064473,"recall@100":0.0943537705,"recall@500":0.2194694798},"test":{"ndcg@10":0.0210539507,"recall@10":0.0202210301,"recall@100":0.081327205,"recall@500":0.2007565342}},"both":{"val":{"ndcg@10":0.0348066351,"recall@10":0.0250384097,"recall@100":0.0914330707,"recall@500":0.2194694798},"test":{"ndcg@10":0.0222419236,"recall@10":0.0201319501,"recall@100":0.082564019,"recall@500":0.2007565342}}},{"tracks":"10","retrieval":{"val":{"ndcg@10":0.0339432064,"recall@10":0.0260617865,"recall@100":0.1020128549,"recall@500":0.2444847434},"test":{"ndcg@10":0.0229529893,"recall@10":0.0225681898,"recall@100":0.0944603886,"recall@500":0.2235714761}},"both":{"val":{"ndcg@10":0.0387880827,"recall@10":0.0322309782,"recall@100":0.1088806649,"recall@500":0.2444847434},"test":{"ndcg@10":0.0265559641,"recall@10":0.0256293855,"recall@100":0.1003642084,"recall@500":0.2235714761}}},{"tracks":"20","retrieval":{"val":{"ndcg@10":0.0347910075,"recall@10":0.0259757324,"recall@100":0.1169940533,"recall@500":0.2736912254},"test":{"ndcg@10":0.0256396091,"recall@10":0.0222284456,"recall@100":0.1038538639,"recall@500":0.2430610846}},"both":{"val":{"ndcg@10":0.0435364402,"recall@10":0.0375752954,"recall@100":0.1185671213,"recall@500":0.2736912254},"test":{"ndcg@10":0.0261722146,"recall@10":0.0254080349,"recall@100":0.1108468365,"recall@500":0.2430610846}}},{"tracks":"50","retrieval":{"val":{"ndcg@10":0.0372923375,"recall@10":0.0284604686,"recall@100":0.1312287537,"recall@500":0.303462026},"test":{"ndcg@10":0.0282998144,"recall@10":0.0233070385,"recall@100":0.1168198681,"recall@500":0.2797139353}},"both":{"val":{"ndcg@10":0.04519548,"recall@10":0.0383160998,"recall@100":0.1372251088,"recall@500":0.303462026},"test":{"ndcg@10":0.0309204635,"recall@10":0.0294816847,"recall@100":0.1268864666,"recall@500":0.2797139353}}},{"tracks":"100","retrieval":{"val":{"ndcg@10":0.0353822785,"recall@10":0.0280417895,"recall@100":0.1308126896,"recall@500":0.3039656503},"test":{"ndcg@10":0.0308468115,"recall@10":0.025328225,"recall@100":0.1240255007,"recall@500":0.2903604536}},"both":{"val":{"ndcg@10":0.0448017796,"recall@10":0.0381494585,"recall@100":0.148878513,"recall@500":0.3039656503},"test":{"ndcg@10":0.0318307042,"recall@10":0.0290912671,"recall@100":0.1421064007,"recall@500":0.2903604536}}},{"tracks":"200","retrieval":{"val":{"ndcg@10":0.0309660027,"recall@10":0.0260821729,"recall@100":0.1272435236,"recall@500":0.3075892429},"test":{"ndcg@10":0.0294472559,"recall@10":0.0246923635,"recall@100":0.125376872,"recall@500":0.3019858352}},"both":{"val":{"ndcg@10":0.044338652,"recall@10":0.0374148629,"recall@100":0.1555336083,"recall@500":0.3075892429},"test":{"ndcg@10":0.0321639433,"recall@10":0.0285186168,"recall@100":0.1493291811,"recall@500":0.3019858352}}},{"tracks":"all","retrieval":{"val":{"ndcg@10":0.0306967854,"recall@10":0.0250330954,"recall@100":0.1206831967,"recall@500":0.3051168461},"test":{"ndcg@10":0.026899368,"recall@10":0.023311662,"recall@100":0.123812637,"recall@500":0.3025355736}},"both":{"val":{"ndcg@10":0.0445651611,"recall@10":0.0380062017,"recall@100":0.1536000573,"recall@500":0.3051168461},"test":{"ndcg@10":0.0331519118,"recall@10":0.0286322223,"recall@100":0.1545305821,"recall@500":0.3025355736}}}],"forms":[{"form":"1 genre","questions":1,"retrieval":{"val":{"ndcg@10":0.010308718,"recall@10":0.0085945929,"recall@100":0.046571073,"recall@500":0.1442000466},"test":{"ndcg@10":0.0137010515,"recall@10":0.0077357684,"recall@100":0.0461881666,"recall@500":0.136627925}}},{"form":"1 genre + mainstream","questions":2,"retrieval":{"val":{"ndcg@10":0.0101503231,"recall@10":0.0085945561,"recall@100":0.0494012894,"recall@500":0.1545540791},"test":{"ndcg@10":0.0139095568,"recall@10":0.0077905867,"recall@100":0.0544420788,"recall@500":0.147761248}}},{"form":"3 genres","questions":3,"retrieval":{"val":{"ndcg@10":0.017149311,"recall@10":0.0129995379,"recall@100":0.0648930301,"recall@500":0.1821129362},"test":{"ndcg@10":0.0167231733,"recall@10":0.0104719289,"recall@100":0.0647446323,"recall@500":0.183747489}}},{"form":"3 genres + mainstream","questions":4,"retrieval":{"val":{"ndcg@10":0.0190986823,"recall@10":0.0127951087,"recall@100":0.0620526631,"recall@500":0.1806985427},"test":{"ndcg@10":0.017185902,"recall@10":0.0101175046,"recall@100":0.0644809481,"recall@500":0.1808232818}}},{"form":"5 genres","questions":5,"retrieval":{"val":{"ndcg@10":0.0173911948,"recall@10":0.0123975912,"recall@100":0.0677683722,"recall@500":0.1907745018},"test":{"ndcg@10":0.0165665285,"recall@10":0.0119019358,"recall@100":0.0682272592,"recall@500":0.1954927458}}},{"form":"5 genres + mainstream","questions":6,"retrieval":{"val":{"ndcg@10":0.0183393908,"recall@10":0.0128819179,"recall@100":0.0676048469,"recall@500":0.1934333234},"test":{"ndcg@10":0.017436373,"recall@10":0.0120322112,"recall@100":0.0648122667,"recall@500":0.194459621}}},{"form":"whole genre profile","questions":null,"retrieval":{"val":{"ndcg@10":0.0205769006,"recall@10":0.0178888972,"recall@100":0.0837121503,"recall@500":0.2259940023},"test":{"ndcg@10":0.0224105252,"recall@10":0.0155726983,"recall@100":0.0840536158,"recall@500":0.2329924277}}},{"form":"3 genres as seed tracks","questions":3,"retrieval":{"val":{"ndcg@10":0.0112827497,"recall@10":0.0096001068,"recall@100":0.0453805171,"recall@500":0.1278998492},"test":{"ndcg@10":0.0069905519,"recall@10":0.0043191952,"recall@100":0.0384764514,"recall@500":0.11876933}},"both":{"val":{"ndcg@10":0.0113734524,"recall@10":0.0085359956,"recall@100":0.0456543303,"recall@500":0.1278998492},"test":{"ndcg@10":0.0058191092,"recall@10":0.0037698706,"recall@100":0.0360084869,"recall@500":0.11876933}}},{"form":"1 artist","questions":1,"retrieval":{"val":{"ndcg@10":0.0180822483,"recall@10":0.0138901555,"recall@100":0.0541038308,"recall@500":0.147440019},"test":{"ndcg@10":0.0133585577,"recall@10":0.0119212672,"recall@100":0.0558976461,"recall@500":0.1458064571}},"both":{"val":{"ndcg@10":0.0182942106,"recall@10":0.0140744514,"recall@100":0.0523598259,"recall@500":0.147440019},"test":{"ndcg@10":0.0146541045,"recall@10":0.0137365304,"recall@100":0.0533739616,"recall@500":0.1458064571}}},{"form":"3 artists","questions":3,"retrieval":{"val":{"ndcg@10":0.0181847588,"recall@10":0.0167627659,"recall@100":0.0702410455,"recall@500":0.1984552043},"test":{"ndcg@10":0.0162815685,"recall@10":0.0132753441,"recall@100":0.0762215539,"recall@500":0.2017874656}},"both":{"val":{"ndcg@10":0.0210850784,"recall@10":0.0182927643,"recall@100":0.0785335793,"recall@500":0.1984552043},"test":{"ndcg@10":0.0187746215,"recall@10":0.0152323589,"recall@100":0.0772655311,"recall@500":0.2017874656}}},{"form":"5 artists","questions":5,"retrieval":{"val":{"ndcg@10":0.0191765245,"recall@10":0.0169454711,"recall@100":0.0779817472,"recall@500":0.2181124657},"test":{"ndcg@10":0.017287161,"recall@10":0.0140668747,"recall@100":0.0813237896,"recall@500":0.2186228386}},"both":{"val":{"ndcg@10":0.0246205161,"recall@10":0.0229992644,"recall@100":0.0872493865,"recall@500":0.2181124657},"test":{"ndcg@10":0.0188634891,"recall@10":0.0158166858,"recall@100":0.0814240802,"recall@500":0.2186228386}}},{"form":"3 genres + mainstream + 3 artists","questions":7,"retrieval":{"val":{"ndcg@10":0.018297899,"recall@10":0.0140952143,"recall@100":0.0697182935,"recall@500":0.207306909},"test":{"ndcg@10":0.0183257589,"recall@10":0.0124492951,"recall@100":0.0769826849,"recall@500":0.2117992044}},"both":{"val":{"ndcg@10":0.0210053844,"recall@10":0.0179097985,"recall@100":0.0774377682,"recall@500":0.207306909},"test":{"ndcg@10":0.0183861169,"recall@10":0.0144957291,"recall@100":0.0816144583,"recall@500":0.2117992044}}},{"form":"1 recent track","questions":null,"retrieval":{"val":{"ndcg@10":0.0273714512,"recall@10":0.0186729794,"recall@100":0.0625558845,"recall@500":0.146312866},"test":{"ndcg@10":0.0144918643,"recall@10":0.0132458444,"recall@100":0.0465490719,"recall@500":0.121940997}},"both":{"val":{"ndcg@10":0.0280173512,"recall@10":0.0209242044,"recall@100":0.0633206881,"recall@500":0.146312866},"test":{"ndcg@10":0.0157103799,"recall@10":0.0146728126,"recall@100":0.0474546058,"recall@500":0.121940997}}},{"form":"3 recent tracks","questions":null,"retrieval":{"val":{"ndcg@10":0.0317897564,"recall@10":0.0212079131,"recall@100":0.0812852004,"recall@500":0.2031438145},"test":{"ndcg@10":0.0216294661,"recall@10":0.0200097095,"recall@100":0.0720779852,"recall@500":0.1809061824}},"both":{"val":{"ndcg@10":0.0350705068,"recall@10":0.0246245994,"recall@100":0.085914474,"recall@500":0.2031438145},"test":{"ndcg@10":0.0223415881,"recall@10":0.0186403333,"recall@100":0.0721394142,"recall@500":0.1809061824}}},{"form":"10 recent tracks","questions":null,"retrieval":{"val":{"ndcg@10":0.0339432064,"recall@10":0.0260617865,"recall@100":0.1020128549,"recall@500":0.2444847434},"test":{"ndcg@10":0.0229529893,"recall@10":0.0225681898,"recall@100":0.0944603886,"recall@500":0.2235714761}},"both":{"val":{"ndcg@10":0.0387880827,"recall@10":0.0322309782,"recall@100":0.1088806649,"recall@500":0.2444847434},"test":{"ndcg@10":0.0265559641,"recall@10":0.0256293855,"recall@100":0.1003642084,"recall@500":0.2235714761}}},{"form":"whole history","questions":null,"retrieval":{"val":{"ndcg@10":0.0306967854,"recall@10":0.0250330954,"recall@100":0.1206831967,"recall@500":0.3051168461},"test":{"ndcg@10":0.026899368,"recall@10":0.023311662,"recall@100":0.123812637,"recall@500":0.3025355736}},"both":{"val":{"ndcg@10":0.0445651611,"recall@10":0.0380062017,"recall@100":0.1536000573,"recall@500":0.3051168461},"test":{"ndcg@10":0.0331519118,"recall@10":0.0286322223,"recall@100":0.1545305821,"recall@500":0.3025355736}}}]},"coldstart":{"cold":[{"label":"Two-tower from audio, lyrics and genres","val":{"users":4044,"ndcg@10":0.0326732759,"recall@10":0.0602582898,"recall@100":0.3009885309},"test":{"users":4004,"ndcg@10":0.0313202973,"recall@10":0.05745782,"recall@100":0.2803708197}},{"label":"Closest in audio, lyrics and genres","val":{"users":4044,"ndcg@10":0.0189617592,"recall@10":0.037244183,"recall@100":0.2012171667},"test":{"users":4004,"ndcg@10":0.0197380873,"recall@10":0.03690487,"recall@100":0.1983004009}},{"label":"Random","val":{"users":4044,"ndcg@10":0.0023546411,"recall@10":0.0050362677,"recall@100":0.0380692345},"test":{"users":4004,"ndcg@10":0.0011333148,"recall@10":0.0021478521,"recall@100":0.0369240067}}],"all":{"val":{"users":10423,"ndcg@10":0.0189958676,"recall@10":0.0155622107,"recall@100":0.0893154639},"test":{"users":10280,"ndcg@10":0.0200609708,"recall@10":0.0155535324,"recall@100":0.0919032199}}},"bias":{"split":"test","k":10,"listening":{"popularity":{"head":0.3119002144,"middle":0.3395049698,"tail":0.3485246541},"genre":{"classical and soundtrack":0.0149600468,"electronic":0.1413603586,"folk and country":0.0597622296,"hip hop":0.0302163321,"jazz and blues":0.0222802573,"latin, reggae and world":0.0125043851,"metal":0.161317482,"other":0.0340206587,"pop":0.1132800624,"punk and hardcore":0.0686415903,"rock":0.3106217112,"soul, r&b and funk":0.031034886}},"models":[{"label":"Popularity","ndcg":0.006050098,"coverage":0.0010678247,"gini":0.9997715964,"slots":{"popularity":{"head":1.0},"genre":{"electronic":0.0962197973,"hip hop":0.0004579111,"metal":0.1658515199,"pop":0.01208106,"punk and hardcore":0.0849181606,"rock":0.6404130943,"soul, r&b and funk":5.84567e-05}},"listeners":{"mainstream":{"users":3302,"mean":0.0087240464,"low":0.0073762546,"high":0.0101051584},"middle":{"users":3593,"mean":0.0058865788,"low":0.0049104963,"high":0.0069806161},"niche":{"users":3369,"mean":0.0036324513,"low":0.0027892005,"high":0.0045575673}},"listener_genres":{"electronic":{"users":1676,"mean":0.0053361171,"low":0.0039596044,"high":0.0069565635},"folk and country":{"users":314,"mean":0.0021549264,"low":0.0003386519,"high":0.0045969565},"hip hop":{"users":304,"mean":0.004114997,"low":0.0012909871,"high":0.0078884688},"metal":{"users":1877,"mean":0.0060565111,"low":0.0045442178,"high":0.0077030956},"pop":{"users":1248,"mean":0.0040019968,"low":0.0024602324,"high":0.0059719166},"punk and hardcore":{"users":407,"mean":0.0022815932,"low":0.0008382672,"high":0.003961111},"rock":{"users":4120,"mean":0.008095579,"low":0.0070109608,"high":0.0091753325},"smaller genres":{"users":318,"mean":0.0021355718,"low":0.0006367397,"high":0.0039374276}}},{"label":"Item-kNN","ndcg":0.0276148491,"coverage":0.1970670416,"gini":0.9587111618,"slots":{"popularity":{"head":0.7689204988,"middle":0.1454793453,"tail":0.0856001559},"genre":{"classical and soundtrack":0.0035268901,"electronic":0.1299103663,"folk and country":0.0347720187,"hip hop":0.0241134061,"jazz and blues":0.0047642245,"latin, reggae and world":0.0078039751,"metal":0.2296667966,"other":0.0202747467,"pop":0.1067322681,"punk and hardcore":0.0604247857,"rock":0.3537899454,"soul, r&b and funk":0.0242205768}},"listeners":{"mainstream":{"users":3302,"mean":0.0294759894,"low":0.0265258861,"high":0.0326660817},"middle":{"users":3593,"mean":0.0276178496,"low":0.0247616521,"high":0.0304848106},"niche":{"users":3369,"mean":0.0259186696,"low":0.0231430283,"high":0.0288604314}},"listener_genres":{"electronic":{"users":1676,"mean":0.0264549534,"low":0.0225834463,"high":0.0308697133},"folk and country":{"users":314,"mean":0.0262371727,"low":0.0181824699,"high":0.0349171023},"hip hop":{"users":304,"mean":0.0405720287,"low":0.0268144395,"high":0.0558058145},"metal":{"users":1877,"mean":0.0291331933,"low":0.0249155544,"high":0.0335885436},"pop":{"users":1248,"mean":0.0263194968,"low":0.0217817352,"high":0.0311090053},"punk and hardcore":{"users":407,"mean":0.0398909362,"low":0.0295526564,"high":0.0507491544},"rock":{"users":4120,"mean":0.0260742292,"low":0.0237716208,"high":0.0285574454},"smaller genres":{"users":318,"mean":0.0244610272,"low":0.0151554283,"high":0.0359584543}}},{"label":"ALS","ndcg":0.0283915625,"coverage":0.2204701988,"gini":0.9214722405,"slots":{"popularity":{"head":0.7382501949,"middle":0.2337879969,"tail":0.0279618083},"genre":{"classical and soundtrack":0.0081449727,"electronic":0.1579598597,"folk and country":0.0466777085,"hip hop":0.0414458301,"jazz and blues":0.0173519096,"latin, reggae and world":0.0074142634,"metal":0.1778741231,"other":0.0240062354,"pop":0.1223402182,"punk and hardcore":0.0501461419,"rock":0.319514809,"soul, r&b and funk":0.0271239283}},"listeners":{"mainstream":{"users":3302,"mean":0.0302555459,"low":0.0276807407,"high":0.033171426},"middle":{"users":3593,"mean":0.0283705966,"low":0.0256344173,"high":0.0312275639},"niche":{"users":3369,"mean":0.0267218451,"low":0.024025173,"high":0.0293890992}},"listener_genres":{"electronic":{"users":1676,"mean":0.0276820903,"low":0.0237041183,"high":0.031984698},"folk and country":{"users":314,"mean":0.0258267517,"low":0.0185748949,"high":0.0334433727},"hip hop":{"users":304,"mean":0.0373210063,"low":0.0243426656,"high":0.0530825479},"metal":{"users":1877,"mean":0.0297370172,"low":0.0263061088,"high":0.0334771988},"pop":{"users":1248,"mean":0.0298514962,"low":0.0252556764,"high":0.034694404},"punk and hardcore":{"users":407,"mean":0.0313828882,"low":0.0232961227,"high":0.0395394346},"rock":{"users":4120,"mean":0.027242075,"low":0.0248917657,"high":0.0295630082},"smaller genres":{"users":318,"mean":0.0249486162,"low":0.0166874935,"high":0.0349082669}}},{"label":"Two-tower","ndcg":0.0324797117,"coverage":0.2869600812,"gini":0.8970749771,"slots":{"popularity":{"head":0.6694368667,"middle":0.2610093531,"tail":0.0695537802},"genre":{"classical and soundtrack":0.0079793453,"electronic":0.1560600156,"folk and country":0.0504968823,"hip hop":0.0399551832,"jazz and blues":0.0170791115,"latin, reggae and world":0.0101422447,"metal":0.1827357755,"other":0.0263834762,"pop":0.1161340608,"punk and hardcore":0.0593043648,"rock":0.3065081839,"soul, r&b and funk":0.0272213562}},"listeners":{"mainstream":{"users":3302,"mean":0.0342154205,"low":0.0313018825,"high":0.0374020398},"middle":{"users":3593,"mean":0.0324844295,"low":0.0296078895,"high":0.0356125768},"niche":{"users":3369,"mean":0.0309277421,"low":0.0280959546,"high":0.0339857132}},"listener_genres":{"electronic":{"users":1676,"mean":0.0331236558,"low":0.0290569946,"high":0.0374184337},"folk and country":{"users":314,"mean":0.029769969,"low":0.0211169338,"high":0.0391788483},"hip hop":{"users":304,"mean":0.0413823871,"low":0.0293822731,"high":0.0550175599},"metal":{"users":1877,"mean":0.0332894561,"low":0.0291886033,"high":0.037265463},"pop":{"users":1248,"mean":0.0326340164,"low":0.0278932417,"high":0.0377222627},"punk and hardcore":{"users":407,"mean":0.0370727052,"low":0.0285383259,"high":0.0459488598},"rock":{"users":4120,"mean":0.0309719216,"low":0.0282763192,"high":0.0336693279},"smaller genres":{"users":318,"mean":0.0331563022,"low":0.0233859939,"high":0.0442067467}}},{"label":"Two-tower + ranker","ndcg":0.0347550783,"coverage":0.3345850611,"gini":0.8790659009,"slots":{"popularity":{"head":0.6014127046,"middle":0.2601714731,"tail":0.1384158223},"genre":{"classical and soundtrack":0.0090120811,"electronic":0.1592069369,"folk and country":0.0511399065,"hip hop":0.0407248636,"jazz and blues":0.0180436477,"latin, reggae and world":0.011477007,"metal":0.1883671083,"other":0.0279423227,"pop":0.1155982073,"punk and hardcore":0.0643316446,"rock":0.2891660171,"soul, r&b and funk":0.0249902572}},"listeners":{"mainstream":{"users":3302,"mean":0.0356364079,"low":0.0325963637,"high":0.0387055343},"middle":{"users":3593,"mean":0.0364298573,"low":0.0332203923,"high":0.0395538097},"niche":{"users":3369,"mean":0.0322702013,"low":0.0293045577,"high":0.0354271298}},"listener_genres":{"electronic":{"users":1676,"mean":0.032996766,"low":0.0287619907,"high":0.0373489137},"folk and country":{"users":314,"mean":0.0332121328,"low":0.0238116113,"high":0.0440135697},"hip hop":{"users":304,"mean":0.0512083753,"low":0.0367513451,"high":0.0666501905},"metal":{"users":1877,"mean":0.0343571305,"low":0.0301976787,"high":0.0385836896},"pop":{"users":1248,"mean":0.0367278936,"low":0.0317492146,"high":0.0418133139},"punk and hardcore":{"users":407,"mean":0.0385771888,"low":0.0291627973,"high":0.0488122869},"rock":{"users":4120,"mean":0.0336491552,"low":0.0307997144,"high":0.0364999073},"smaller genres":{"users":318,"mean":0.035608454,"low":0.0247417439,"high":0.0474406048}}},{"label":"Two-tower + ranker with artist features","ndcg":0.0368457443,"coverage":0.3905924647,"gini":0.8418680186,"slots":{"popularity":{"head":0.5138737334,"middle":0.2820537802,"tail":0.2040724864},"genre":{"classical and soundtrack":0.0091971941,"electronic":0.1628994544,"folk and country":0.0535463757,"hip hop":0.0407248636,"jazz and blues":0.0184333593,"latin, reggae and world":0.0126071707,"metal":0.1882209665,"other":0.0310600156,"pop":0.113104053,"punk and hardcore":0.0685795012,"rock":0.2751071707,"soul, r&b and funk":0.0265198753}},"listeners":{"mainstream":{"users":3302,"mean":0.0376938387,"low":0.0342549359,"high":0.0411647251},"middle":{"users":3593,"mean":0.0382629842,"low":0.0348744235,"high":0.041708091},"niche":{"users":3369,"mean":0.0346780332,"low":0.0313061301,"high":0.0380081888}},"listener_genres":{"electronic":{"users":1676,"mean":0.0341938383,"low":0.0298195001,"high":0.0389443759},"folk and country":{"users":314,"mean":0.0370784646,"low":0.0268147451,"high":0.0477474236},"hip hop":{"users":304,"mean":0.0465994819,"low":0.0321043844,"high":0.0636099906},"metal":{"users":1877,"mean":0.0389465936,"low":0.0343816431,"high":0.0435654834},"pop":{"users":1248,"mean":0.037264773,"low":0.0320203506,"high":0.0431336157},"punk and hardcore":{"users":407,"mean":0.0462993727,"low":0.0350753715,"high":0.0577813294},"rock":{"users":4120,"mean":0.0354174905,"low":0.0326769899,"high":0.0384538667},"smaller genres":{"users":318,"mean":0.0354823892,"low":0.0236012072,"high":0.0485843122}}},{"label":"The same with the popularity penalty","ndcg":0.0361362451,"coverage":0.4183203118,"gini":0.8191717258,"slots":{"popularity":{"head":0.4613698363,"middle":0.2971745908,"tail":0.2414555729},"genre":{"classical and soundtrack":0.0099961029,"electronic":0.1619349182,"folk and country":0.055855417,"hip hop":0.0418160561,"jazz and blues":0.019748636,"latin, reggae and world":0.0134353079,"metal":0.1858437256,"other":0.0326773188,"pop":0.1127045986,"punk and hardcore":0.0706547155,"rock":0.2689204988,"soul, r&b and funk":0.0264127046}},"listeners":{"mainstream":{"users":3302,"mean":0.0371446688,"low":0.0337782327,"high":0.0405301946},"middle":{"users":3593,"mean":0.0376357491,"low":0.0342254918,"high":0.0408333246},"niche":{"users":3369,"mean":0.03372029,"low":0.0304414188,"high":0.0370440427}},"listener_genres":{"electronic":{"users":1676,"mean":0.0335641592,"low":0.0291054848,"high":0.0382325943},"folk and country":{"users":314,"mean":0.0363553207,"low":0.0260833021,"high":0.0469998905},"hip hop":{"users":304,"mean":0.0460827559,"low":0.0319181686,"high":0.0624314904},"metal":{"users":1877,"mean":0.0378480227,"low":0.0333764036,"high":0.0423369818},"pop":{"users":1248,"mean":0.0367409798,"low":0.0314518084,"high":0.0424675521},"punk and hardcore":{"users":407,"mean":0.0445847079,"low":0.0338208051,"high":0.0559015582},"rock":{"users":4120,"mean":0.0347310149,"low":0.0319557147,"high":0.0376941635},"smaller genres":{"users":318,"mean":0.036701577,"low":0.0242541704,"high":0.0504048311}}}],"penalty":{"chosen":0.1,"rows":[{"lambda":0.0,"ndcg":0.044871269,"head":0.5149101739,"middle":0.2812373907,"tail":0.2038524354,"coverage":0.3909662033},{"lambda":0.05,"ndcg":0.0445173196,"head":0.4893361514,"middle":0.2889422615,"tail":0.2217215871,"coverage":0.4045809678},{"lambda":0.1,"ndcg":0.0442844827,"head":0.4631664905,"middle":0.2958689596,"tail":0.2409645499,"coverage":0.4191389774},{"lambda":0.2,"ndcg":0.043831675,"head":0.410452493,"middle":0.3089057546,"tail":0.2806417523,"coverage":0.4463863034},{"lambda":0.3,"ndcg":0.0431226849,"head":0.357661639,"middle":0.3188778941,"tail":0.3234604669,"coverage":0.4727259784},{"lambda":0.5,"ndcg":0.040660279,"head":0.2591411279,"middle":0.3298875973,"tail":0.4109712749,"coverage":0.5175568172},{"lambda":0.75,"ndcg":0.0372202871,"head":0.1565952541,"middle":0.3230281487,"tail":0.5203765972,"coverage":0.5631529303},{"lambda":1.0,"ndcg":0.0327133669,"head":0.0821116342,"middle":0.2959169949,"tail":0.6219713709,"coverage":0.5905426329}]}},"serving":{"users":14350,"same_top":{"10":1.0,"500":0.9995818815,"1000":0.9643902439},"requests":200,"latency":{"known":{"listens":{"p50":0.0019357707,"p95":0.0046354823},"vectors":{"p50":4.3375e-05,"p95":9.99021e-05},"retrieval":{"p50":0.0022271881,"p95":0.0032260919},"features":{"p50":0.0117986249,"p95":0.0153613559},"ranker":{"p50":0.0017380416,"p95":0.002041071},"reasons":{"p50":0.0023024585,"p95":0.0028276152},"total":{"p50":0.020991479,"p95":0.0265769058}},"new":{"vectors":{"p50":0.0372285834,"p95":0.045030619},"retrieval":{"p50":0.0022444166,"p95":0.0029325224},"features":{"p50":0.0115946881,"p95":0.0147684228},"ranker":{"p50":0.0017164582,"p95":0.0020767502},"reasons":{"p50":0.0023265416,"p95":0.0029011693},"total":{"p50":0.0562056666,"p95":0.0690471038}}}}};
+
+// ---------- small helpers ----------
+const NS = "http://www.w3.org/2000/svg";
+const $ = (id) => document.getElementById(id);
+function svgEl(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const k in attrs || {}) {
+    if (k === "class") e.className = attrs[k]; else if (k === "style") e.style.cssText = attrs[k]; else e.setAttribute(k, attrs[k]);
+  }
+  for (const c of kids) e.append(c);
+  return e;
+}
+const f4 = (v) => v.toFixed(4);
+const signed = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(4);
+const pct = (v) => (v * 100).toFixed(v < 0.1 ? 1 : 0) + "%";
+const ms = (v) => Math.round(v * 1000) + " ms";
+const cssv = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+function niceStep(span, n) {
+  const raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), r = raw / mag;
+  return (r <= 1 ? 1 : r <= 2 ? 2 : r <= 2.5 ? 2.5 : r <= 5 ? 5 : 10) * mag;
+}
+function ticks(lo, hi, n) {
+  const step = niceStep(hi - lo || 1, n), out = [];
+  for (let t = Math.ceil(lo / step - 1e-9) * step; t <= hi + 1e-9; t += step) out.push(+t.toFixed(10));
+  return out;
+}
+function niceMax(v) { const s = niceStep(v, 4); return Math.ceil(v / s - 1e-9) * s || s; }
+
+// ---------- tooltip ----------
+const tip = $("tip");
+function showTip(ev, html) {
+  tip.innerHTML = html; tip.style.display = "block";
+  const pad = 14, w = tip.offsetWidth, hgt = tip.offsetHeight;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + w > innerWidth - 8) x = ev.clientX - w - pad;
+  if (y + hgt > innerHeight - 8) y = ev.clientY - hgt - pad;
+  tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+function hover(el, html) {
+  el.addEventListener("pointermove", (ev) => showTip(ev, typeof html === "function" ? html(ev) : html));
+  el.addEventListener("pointerleave", hideTip);
+}
+const tipRows = (title, pairs) =>
+  `<div class="t">${title}</div>` + pairs.map(([k, v]) => `<div class="r"><span>${k}</span><b>${v}</b></div>`).join("");
+
+// ---------- controls ----------
+function seg(id, options, value, onChange) {
+  const box = $(id); box.innerHTML = "";
+  for (const [val, label] of options) {
+    const b = h("button", { type: "button", "aria-pressed": String(val === value) }, label);
+    b.addEventListener("click", () => {
+      for (const o of box.children) o.setAttribute("aria-pressed", "false");
+      b.setAttribute("aria-pressed", "true"); onChange(val);
+    });
+    box.append(b);
+  }
+}
+function legend(id, items) {
+  const box = $(id); box.innerHTML = "";
+  for (const it of items) {
+    const mark = h("span", { class: it.kind || "sw", style: `background:${it.color}` });
+    box.append(h("span", { class: "key" }, mark, it.label));
+  }
+}
+
+// ---------- row charts: one HTML row per item, the mark drawn in a thin SVG strip ----------
+// spec: {domain:[lo,hi], value(r) -> text, mark(svg, r, x), tip(r) -> html}
+function rowChart(boxId, rows, spec) {
+  const box = $(boxId); box.innerHTML = "";
+  const W = Math.max(200, box.clientWidth || 600);
+  const [lo, hi] = spec.domain;
+  const x = (v) => ((v - lo) / (hi - lo)) * W;
+  const tks = ticks(lo, hi, W < 420 ? 3 : 5);
+  for (const r of rows) {
+    const svg = svgEl("svg", { viewBox: `0 0 ${W} 14`, preserveAspectRatio: "none", "aria-hidden": "true" });
+    for (const t of tks) svgEl("line", { x1: x(t), x2: x(t), y1: 0, y2: 14, class: t === 0 ? "zero" : "grid" }, svg);
+    spec.mark(svg, r, x);
+    const row = h("div", { class: "row" },
+      h("div", { class: "rl" }, h("span", { class: "name" }, r.label), h("span", { class: "v" }, spec.value(r))), svg);
+    if (spec.tip) hover(row, () => spec.tip(r));
+    box.append(row);
+  }
+  const ax = svgEl("svg", { viewBox: `0 0 ${W} 18`, preserveAspectRatio: "none", "aria-hidden": "true" });
+  tks.forEach((t, i) => {
+    const anchor = i === 0 && x(t) < 20 ? "start" : x(t) > W - 20 ? "end" : "middle";
+    svgEl("text", { x: x(t), y: 13, "text-anchor": anchor }, ax).textContent = spec.tick ? spec.tick(t) : t;
+  });
+  box.append(h("div", { class: "row axis" }, ax));
+}
+function bar(svg, x, v, color, lo = 0) {
+  const x0 = x(lo), w = Math.max(0, x(v) - x0), y = 1, hh = 12, rad = Math.min(4, w);
+  svgEl("path", {
+    d: `M${x0},${y} h${w - rad} a${rad},${rad} 0 0 1 ${rad},${rad} v${hh - 2 * rad} a${rad},${rad} 0 0 1 ${-rad},${rad} h${-(w - rad)} z`,
+    fill: color,
+  }, svg);
+}
+function interval(svg, x, mid, low, high, color) {
+  svgEl("line", { x1: x(low), x2: x(high), y1: 7, y2: 7, stroke: color, "stroke-width": 2, "stroke-linecap": "round" }, svg);
+  svgEl("circle", { cx: x(mid), cy: 7, r: 5, fill: color, stroke: cssv("--surface"), "stroke-width": 2 }, svg);
+}
+function dot(svg, x, v, color) {
+  svgEl("circle", { cx: x(v), cy: 7, r: 5, fill: color, stroke: cssv("--surface"), "stroke-width": 2 }, svg);
+}
+
+// ---------- line chart over categories ----------
+function lineChart(boxId, xs, series, refs, fmt, title) {
+  const box = $(boxId); box.innerHTML = "";
+  const W = Math.max(260, box.clientWidth || 600), H = 280, m = { l: 48, r: 14, t: 14, b: 30 };
+  const all = series.flatMap((s) => s.values).concat(refs.map((r) => r.value));
+  const top = niceMax(Math.max(...all) * 1.05);
+  const px = (i) => m.l + (i * (W - m.l - m.r)) / (xs.length - 1);
+  const py = (v) => m.t + (1 - v / top) * (H - m.t - m.b);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": title }, null);
+  for (const t of ticks(0, top, 4)) {
+    svgEl("line", { x1: m.l, x2: W - m.r, y1: py(t), y2: py(t), class: t === 0 ? "zero" : "grid" }, svg);
+    svgEl("text", { x: m.l - 6, y: py(t) + 4, "text-anchor": "end", class: "tick" }, svg).textContent = fmt(t);
+  }
+  xs.forEach((lab, i) => {
+    if (W < 420 && i % 2 === 1 && i !== xs.length - 1) return;
+    svgEl("text", { x: px(i), y: H - 10, "text-anchor": "middle", class: "tick" }, svg).textContent = lab;
+  });
+  for (const r of refs) {
+    svgEl("line", { x1: m.l, x2: W - m.r, y1: py(r.value), y2: py(r.value), class: "ref" }, svg);
+    svgEl("text", { x: m.l + 6, y: py(r.value) - 5, class: "reflabel" }, svg).textContent = `${r.label} ${fmt(r.value)}`;
+  }
+  for (const s of series) {
+    const d = s.values.map((v, i) => `${i ? "L" : "M"}${px(i)},${py(v)}`).join("");
+    svgEl("path", { d, fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+  }
+  const cross = svgEl("line", { y1: m.t, y2: H - m.b, class: "zero", visibility: "hidden" }, svg);
+  for (const s of series) s.values.forEach((v, i) =>
+    svgEl("circle", { cx: px(i), cy: py(v), r: 4, fill: s.color, stroke: cssv("--surface"), "stroke-width": 2 }, svg));
+  const hit = svgEl("rect", { x: m.l - 10, y: 0, width: W - m.l - m.r + 20, height: H, fill: "transparent" }, svg);
+  hit.addEventListener("pointermove", (ev) => {
+    const rect = svg.getBoundingClientRect(), sx = ((ev.clientX - rect.left) / rect.width) * W;
+    const i = Math.max(0, Math.min(xs.length - 1, Math.round(((sx - m.l) / (W - m.l - m.r)) * (xs.length - 1))));
+    cross.setAttribute("x1", px(i)); cross.setAttribute("x2", px(i)); cross.setAttribute("visibility", "visible");
+    showTip(ev, tipRows(series[0].heading(i), series.map((s) => [s.label, fmt(s.values[i])]).concat(refs.map((r) => [r.label, fmt(r.value)]))));
+  });
+  hit.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+  box.append(svg);
+}
+
+function table(boxId, header, rows) {
+  const t = h("table", {}, h("thead", {}, h("tr", {}, ...header.map((c) => h("th", {}, c)))),
+    h("tbody", {}, ...rows.map((r) => h("tr", {}, ...r.map((c) => h("td", {}, c))))));
+  $(boxId).innerHTML = ""; $(boxId).append(t);
+}
+
+// ---------- state ----------
+const S = { split: "test", metric: "ndcg", k: 10, newMetric: "ndcg@10", coldMetric: "ndcg@10", biasModel: null };
+const R = D.results, N = D.newcomers, C = D.coldstart, B = D.bias, V = D.serving;
+const metricName = (m) => m.replace("ndcg", "NDCG").replace("recall", "Recall");
+
+// ---------- hero ----------
+function renderTiles() {
+  const by = Object.fromEntries(R.models.map((m) => [m.key, m]));
+  const fin = by["tt_id + ranker_artist"].test, als = by["als"].test;
+  const tiles = [
+    ["NDCG@10 on test", f4(fin["ndcg@10"]), `ALS, the strongest baseline: ${f4(als["ndcg@10"])}`],
+    ["Ahead of ALS on NDCG@10", "+" + Math.round((fin["ndcg@10"] / als["ndcg@10"] - 1) * 100) + "%", `Recall@10: +${Math.round((fin["recall@10"] / als["recall@10"] - 1) * 100)}%`],
+    ["Listeners scored", R.users.test.toLocaleString("en"), "on the two weeks after training"],
+    ["A new listener served in", ms(V.latency.new.total.p50), `known listener: ${ms(V.latency.known.total.p50)}`],
+  ];
+  $("tiles").innerHTML = "";
+  for (const [l, v, s] of tiles) $("tiles").append(h("div", { class: "tile" }, h("div", { class: "label" }, l), h("div", { class: "value" }, v), h("div", { class: "sub" }, s)));
+}
+
+// ---------- models and gaps ----------
+const OURS = new Set(["tt_id", "tt_id + ranker", "tt_id + ranker_artist"]);
+function renderModels() {
+  const key = `${S.metric}@${S.k}`;
+  const rows = R.models.map((m) => ({ label: m.label, v: m[S.split][key], ours: OURS.has(m.key) }));
+  const top = niceMax(Math.max(...rows.map((r) => r.v)) * 1.02);
+  rowChart("models", rows, {
+    domain: [0, top], tick: (t) => +t.toFixed(4),
+    value: (r) => f4(r.v),
+    mark: (svg, r, x) => bar(svg, x, r.v, r.ours ? cssv("--s1") : cssv("--base")),
+    tip: (r) => tipRows(r.label, [[`${metricName(key)}, ${S.split}`, f4(r.v)]]),
+  });
+  const g = R.gaps.map((x) => ({ label: `${x.model} minus ${x.against}`, ...x[S.split][key] }));
+  const span = Math.max(...g.map((r) => Math.max(Math.abs(r.low), Math.abs(r.high)))) || 0.001;
+  const lim = niceMax(span * 1.1);
+  rowChart("gaps", g, {
+    domain: [Math.min(0, -lim * 0.25, ...g.map((r) => r.low)), lim], tick: (t) => +t.toFixed(4),
+    value: (r) => `${signed(r.diff)} (${signed(r.low)} to ${signed(r.high)})`,
+    mark: (svg, r, x) => interval(svg, x, r.diff, r.low, r.high, cssv("--s1")),
+    tip: (r) => tipRows(r.label, [[metricName(key), signed(r.diff)], ["95% interval", `${signed(r.low)} to ${signed(r.high)}`]]),
+  });
+}
+
+// ---------- SHAP ----------
+const GROUPS = { artist: "--s1", models: "--s2", track: "--s3", "listener and track": "--s4", listener: "--s5" };
+const GROUP_NAMES = { artist: "Artist history", models: "Model scores", track: "Track trends", "listener and track": "Listener and track", listener: "Listener" };
+function renderShap() {
+  legend("shap-legend", Object.keys(GROUPS).map((g) => ({ label: GROUP_NAMES[g], color: cssv(GROUPS[g]) })));
+  const top = niceMax(R.shap[0].value);
+  rowChart("shap", R.shap, {
+    domain: [0, top], tick: (t) => +t.toFixed(2),
+    value: (r) => r.value.toFixed(3),
+    mark: (svg, r, x) => bar(svg, x, r.value, cssv(GROUPS[r.group])),
+    tip: (r) => tipRows(r.label, [["Group", GROUP_NAMES[r.group]], ["Mean |SHAP|", r.value.toFixed(3)], ["Feature", `<code>${r.feature}</code>`]]),
+  });
+}
+
+// ---------- new listeners ----------
+const NEW_METRICS = [["ndcg@10", "NDCG@10"], ["recall@10", "Recall@10"], ["recall@100", "Recall@100"], ["recall@500", "Recall@500"]];
+function renderCurve() {
+  const m = S.newMetric, sp = S.split;
+  const xs = N.curve.map((p) => (p.tracks === "all" ? "all" : p.tracks));
+  const heading = (i) => (N.curve[i].tracks === "all" ? "Whole history" : `${N.curve[i].tracks} most recent tracks`);
+  const series = [
+    { label: "Both stages", color: cssv("--s1"), values: N.curve.map((p) => p.both[sp][m]), heading },
+    { label: "Retrieval alone", color: cssv("--s2"), values: N.curve.map((p) => p.retrieval[sp][m]), heading },
+  ];
+  const refs = [
+    { label: "Vectors learned in training", value: N.learned[sp][m] },
+    { label: "Most popular tracks", value: N.popularity[sp][m] },
+  ];
+  legend("curve-legend", [
+    { label: "Both stages", color: cssv("--s1"), kind: "ln" },
+    { label: "Retrieval alone", color: cssv("--s2"), kind: "ln" },
+    { label: "Reference lines: learned vectors, most popular tracks", color: cssv("--muted"), kind: "ln" },
+  ]);
+  lineChart("curve", xs, series, refs, (v) => v.toFixed(m === "ndcg@10" || m === "recall@10" ? 3 : 2),
+    `${metricName(m)} against the number of recent tracks handed in`);
+  table("curve-table", ["Recent tracks", "Both stages", "Retrieval alone"],
+    N.curve.map((p, i) => [xs[i], f4(series[0].values[i]), f4(series[1].values[i])])
+      .concat([["Learned vectors", f4(refs[0].value), ""], ["Most popular tracks", f4(refs[1].value), ""]]));
+
+  const kind = (name) => (/artist/.test(name) ? "artists" : /recent|history/.test(name) ? "listens" : "genres");
+  const KC = { genres: "--s1", artists: "--s2", listens: "--s3" };
+  legend("forms-legend", [
+    { label: "Genre answers", color: cssv(KC.genres) }, { label: "Artist answers", color: cssv(KC.artists) },
+    { label: "Recent tracks, for comparison", color: cssv(KC.listens) }, { label: "Most popular tracks", color: cssv("--base") },
+  ]);
+  const rows = N.forms.map((f) => ({
+    label: f.form, kind: kind(f.form), stage: f.both ? "both stages" : "retrieval alone",
+    v: (f.both || f.retrieval)[sp][m], color: cssv(KC[kind(f.form)]), questions: f.questions,
+  }));
+  rows.push({ label: "Most popular tracks", v: N.popularity[sp][m], color: cssv("--base"), stage: "no answers" });
+  const top = niceMax(Math.max(...rows.map((r) => r.v)) * 1.02);
+  rowChart("forms", rows, {
+    domain: [0, top], tick: (t) => +t.toFixed(4),
+    value: (r) => f4(r.v),
+    mark: (svg, r, x) => bar(svg, x, r.v, r.color),
+    tip: (r) => tipRows(r.label, [[metricName(m), f4(r.v)], ["Served by", r.stage]].concat(r.questions ? [["Questions", r.questions]] : [])),
+  });
+}
+
+// ---------- cold start ----------
+function renderCold() {
+  const m = S.coldMetric, sp = S.split;
+  const rows = C.cold.map((c) => ({ label: c.label, v: c[sp][m], users: c[sp].users }));
+  rowChart("cold", rows, {
+    domain: [0, niceMax(Math.max(...rows.map((r) => r.v)) * 1.02)], tick: (t) => +t.toFixed(3),
+    value: (r) => f4(r.v),
+    mark: (svg, r, x) => bar(svg, x, r.v, r.label === "Random" ? cssv("--base") : cssv("--s1")),
+    tip: (r) => tipRows(r.label, [[metricName(m), f4(r.v)], ["Listeners scored", r.users.toLocaleString("en")]]),
+  });
+  $("cold-note").textContent = `Scored over ${rows[0].users.toLocaleString("en")} listeners who went on to play at least one of the removed tracks.`;
+}
+
+// ---------- bias ----------
+const POP_ORDER = ["head", "middle", "tail"], LISTENER_ORDER = ["mainstream", "middle", "niche"];
+function dumbbell(boxId, legendId, rows) {
+  legend(legendId, [
+    { label: "Share of the model's top-10 slots", color: cssv("--s1"), kind: "dot" },
+    { label: "Share of what listeners discovered", color: cssv("--ink-2"), kind: "dot" },
+  ]);
+  const top = Math.min(1, niceMax(Math.max(...rows.flatMap((r) => [r.a, r.b])) * 1.05));
+  rowChart(boxId, rows, {
+    domain: [0, top], tick: (t) => Math.round(t * 100) + "%",
+    value: (r) => `${pct(r.a)} of slots · ${pct(r.b)} of discoveries`,
+    mark: (svg, r, x) => {
+      svgEl("line", { x1: x(Math.min(r.a, r.b)), x2: x(Math.max(r.a, r.b)), y1: 7, y2: 7, stroke: cssv("--axis"), "stroke-width": 2 }, svg);
+      dot(svg, x, r.b, cssv("--ink-2"));
+      dot(svg, x, r.a, cssv("--s1"));
+    },
+    tip: (r) => tipRows(r.label, [["Share of slots", pct(r.a)], ["Share of discoveries", pct(r.b)], ["Ratio", r.b ? (r.a / r.b).toFixed(2) + "×" : "–"]]),
+  });
+}
+function groupIntervals(boxId, groups, order) {
+  const names = order || Object.keys(groups).sort((a, b) => groups[b].users - groups[a].users);
+  const rows = names.map((n) => ({ label: n, ...groups[n] }));
+  rowChart(boxId, rows, {
+    domain: [0, niceMax(Math.max(...rows.map((r) => r.high)) * 1.02)], tick: (t) => +t.toFixed(3),
+    value: (r) => `${f4(r.mean)} (${f4(r.low)} to ${f4(r.high)})`,
+    mark: (svg, r, x) => interval(svg, x, r.mean, r.low, r.high, cssv("--s1")),
+    tip: (r) => tipRows(r.label, [["NDCG@10", f4(r.mean)], ["95% interval", `${f4(r.low)} to ${f4(r.high)}`], ["Listeners", r.users.toLocaleString("en")]]),
+  });
+}
+function renderBias() {
+  const m = B.models.find((x) => x.label === S.biasModel);
+  dumbbell("pop", "pop-legend", POP_ORDER.map((g) => ({ label: g, a: m.slots.popularity[g] || 0, b: B.listening.popularity[g] || 0 })));
+  const genres = Object.keys(B.listening.genre).sort((a, b) => B.listening.genre[b] - B.listening.genre[a]);
+  dumbbell("genres", "genre-legend", genres.map((g) => ({ label: g, a: m.slots.genre[g] || 0, b: B.listening.genre[g] })));
+  groupIntervals("listeners", m.listeners, LISTENER_ORDER);
+  groupIntervals("listener-genres", m.listener_genres);
+}
+function renderPenalty() {
+  const box = $("penalty"); box.innerHTML = "";
+  const pts = B.penalty.rows, chosen = B.penalty.chosen;
+  legend("penalty-legend", [
+    { label: "One point per penalty strength λ", color: cssv("--s1"), kind: "dot" },
+    { label: `Chosen, λ = ${chosen}`, color: cssv("--s2"), kind: "dot" },
+  ]);
+  const W = Math.max(260, box.clientWidth || 600), H = 260, mg = { l: 52, r: 16, t: 16, b: 40 };
+  const xs = pts.map((p) => p.tail), ys = pts.map((p) => p.ndcg);
+  const x0 = Math.floor(Math.min(...xs) * 20) / 20, x1 = Math.ceil(Math.max(...xs) * 20) / 20;
+  const ylo = Math.floor(Math.min(...ys) * 1000) / 1000, yhi = Math.ceil(Math.max(...ys) * 1000) / 1000;
+  const px = (v) => mg.l + ((v - x0) / (x1 - x0)) * (W - mg.l - mg.r);
+  const py = (v) => mg.t + (1 - (v - ylo) / (yhi - ylo)) * (H - mg.t - mg.b);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "NDCG@10 against the tail's share of slots, one point per penalty strength" });
+  for (const t of ticks(ylo, yhi, 4)) {
+    svgEl("line", { x1: mg.l, x2: W - mg.r, y1: py(t), y2: py(t), class: "grid" }, svg);
+    svgEl("text", { x: mg.l - 6, y: py(t) + 4, "text-anchor": "end", class: "tick" }, svg).textContent = t.toFixed(3);
+  }
+  for (const t of ticks(x0, x1, W < 420 ? 3 : 5)) {
+    svgEl("line", { x1: px(t), x2: px(t), y1: mg.t, y2: H - mg.b, class: "grid" }, svg);
+    svgEl("text", { x: px(t), y: H - mg.b + 16, "text-anchor": "middle", class: "tick" }, svg).textContent = Math.round(t * 100) + "%";
+  }
+  svgEl("text", { x: (mg.l + W - mg.r) / 2, y: H - 6, "text-anchor": "middle", class: "tick" }, svg).textContent = "Tail's share of top-10 slots";
+  svgEl("text", { x: 12, y: (mg.t + H - mg.b) / 2, "text-anchor": "middle", class: "tick", transform: `rotate(-90 12 ${(mg.t + H - mg.b) / 2})` }, svg).textContent = "NDCG@10 (val)";
+  svgEl("path", { d: pts.map((p, i) => `${i ? "L" : "M"}${px(p.tail)},${py(p.ndcg)}`).join(""), fill: "none", stroke: cssv("--s1"), "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+  pts.forEach((p, i) => {
+    const isChosen = p.lambda === chosen;
+    const c = svgEl("circle", { cx: px(p.tail), cy: py(p.ndcg), r: isChosen ? 6 : 4, fill: isChosen ? cssv("--s2") : cssv("--s1"), stroke: cssv("--surface"), "stroke-width": 2 }, svg);
+    const hit = svgEl("circle", { cx: px(p.tail), cy: py(p.ndcg), r: 12, fill: "transparent" }, svg);
+    hover(hit, tipRows(`λ = ${p.lambda}` + (isChosen ? " (chosen)" : ""), [["NDCG@10", f4(p.ndcg)], ["Head / middle / tail", `${pct(p.head)} / ${pct(p.middle)} / ${pct(p.tail)}`], ["Coverage@10", pct(p.coverage)]]));
+    if (i === 0 || i === pts.length - 1) {  // the chosen point is named in the legend, so the ends are the only labels
+      const left = px(p.tail) > W - 110;
+      svgEl("text", { x: px(p.tail) + (left ? -8 : 8), y: py(p.ndcg) - 10, "text-anchor": left ? "end" : "start", class: "ptlabel" }, svg)
+        .textContent = `λ = ${p.lambda}` + (i === 0 ? ", no penalty" : "");
+    }
+  });
+  box.append(svg);
+  table("penalty-table", ["λ", "NDCG@10", "Head", "Middle", "Tail", "Coverage@10"],
+    pts.map((p) => [String(p.lambda) + (p.lambda === chosen ? " (chosen)" : ""), f4(p.ndcg), pct(p.head), pct(p.middle), pct(p.tail), pct(p.coverage)]));
+}
+
+// ---------- serving ----------
+function renderServing() {
+  $("requests").textContent = V.requests.toLocaleString("en");
+  const tiles = [
+    ["Same top 10 as offline", pct(V.same_top["10"]), `of ${V.users.toLocaleString("en")} known listeners`],
+    ["Known listener", ms(V.latency.known.total.p50), `median; 95th percentile ${ms(V.latency.known.total.p95)}`],
+    ["Someone new", ms(V.latency.new.total.p50), `median; 95th percentile ${ms(V.latency.new.total.p95)}`],
+  ];
+  $("serve-tiles").innerHTML = "";
+  for (const [l, v, s] of tiles) $("serve-tiles").append(h("div", { class: "tile" }, h("div", { class: "label" }, l), h("div", { class: "value" }, v), h("div", { class: "sub" }, s)));
+  const STAGE = { listens: "Read their listens", vectors: "Listener vector", retrieval: "Retrieval", features: "Ranker features", ranker: "Ranker", reasons: "Reasons", total: "Total" };
+  const stages = Object.keys(STAGE).filter((s) => s in V.latency.known || s in V.latency.new);
+  const cell = (who, s) => (V.latency[who][s] ? `${(V.latency[who][s].p50 * 1000).toFixed(1)} ms` : "–");
+  table("stages", ["Step (median)", "Known listener", "Someone new"], stages.map((s) => [STAGE[s], cell("known", s), cell("new", s)]));
+}
+
+// ---------- wiring ----------
+function renderSplitParts() {
+  $("split-note").textContent = `${R.users[S.split].toLocaleString("en")} listeners in the model comparison`;
+  renderModels(); renderCurve(); renderCold();
+}
+function renderAll() {
+  renderTiles(); renderSplitParts(); renderShap(); renderBias(); renderPenalty(); renderServing();
+}
+seg("split", [["test", "test"], ["val", "val"]], S.split, (v) => { S.split = v; renderSplitParts(); });
+seg("metric", [["ndcg", "NDCG"], ["recall", "Recall"]], S.metric, (v) => { S.metric = v; renderModels(); });
+seg("k", R.ks.map((k) => [k, String(k)]), S.k, (v) => { S.k = v; renderModels(); });
+seg("new-metric", NEW_METRICS, S.newMetric, (v) => { S.newMetric = v; renderCurve(); });
+seg("cold-metric", [["ndcg@10", "NDCG@10"], ["recall@10", "Recall@10"], ["recall@100", "Recall@100"]], S.coldMetric, (v) => { S.coldMetric = v; renderCold(); });
+
+const sel = $("bias-model");
+for (const m of B.models) sel.append(h("option", { value: m.label }, m.label));
+S.biasModel = B.models.find((m) => m.label.startsWith("Two-tower + ranker with artist")).label;
+sel.value = S.biasModel;
+sel.addEventListener("change", () => { S.biasModel = sel.value; renderBias(); });
+for (const e of document.querySelectorAll(".bias-split")) e.textContent = B.split;
+
+renderAll();
+let resizeTimer;
+addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderAll, 150); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderAll);
+</script>
+</body>
+</html>

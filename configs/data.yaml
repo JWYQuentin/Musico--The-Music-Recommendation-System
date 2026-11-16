@@ -5,6 +5,7 @@ paths:
   interim: data/interim
   processed: data/processed
   reports: reports
+  docs: docs              # the public results page, built from reports/*.json only
 
 zenodo_record: "6609677"
 

@@ -128,8 +128,15 @@ Full tables: `reports/bias.md` and `reports/bias_tuning.md`.
 
 ## Demo
 
-A single HTML page for exploring the results. Pick one of 200 listeners to see what
-they played recently, the system's top 10 with the ranker's reasons in words, how far
+**Results page:
+[jwyquentin.github.io/Musico--The-Music-Recommendation-System](https://jwyquentin.github.io/Musico--The-Music-Recommendation-System/).**
+An interactive version of the results in this README, built only from the totals in
+`reports/`: no titles, artists or individual listeners. To rebuild it,
+`python -m m4a_rec.results_page` (writes `docs/index.html`).
+
+**Listener demo, local only.** A single HTML page for exploring the results. Pick one of
+200 listeners to see what they played recently, the system's top 10 with the ranker's
+reasons in words, how far
 the ranker moved each track from its retrieval position, and a mark where the listener
 went on to play it. Every model's list is shown side by side, and any track opens its
 nearest tracks from a FAISS index over the retrieval model's vectors.
@@ -344,8 +351,10 @@ src/m4a_rec/    one module per step
   bundle, serve, api                 the service: its bundle, both stages at request time, HTTP
   newcomers                          the models refitted without 10% of listeners, for the new-listener test
   questionnaire                      those listeners served from answers to a form instead of listens
+  results_page                       the public results page, from the reports' totals only
 tests/          hand-checked tests on synthetic data
 reports/        decisions.md (every design choice and why) and the generated reports
+docs/           the public results page, generated from reports/
 CLAUDE.md       project brief and rules for Claude Code
 ```
 

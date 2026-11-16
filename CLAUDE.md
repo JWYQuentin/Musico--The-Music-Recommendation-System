@@ -60,6 +60,9 @@ small live demo.
   not on `test` (0.0299 against 0.0332; Recall@100 and @500 clearly lower), so
   `fold_in_half_life` stays null. Recorded in `reports/decisions.md`, decided after
   reading `test`.
+- Phase 8, step 6: the public results page, done, 2026-11-16. `python -m m4a_rec.results_page`
+  builds `docs/index.html` from `reports/*.json` only: interactive charts of the totals,
+  no titles, artists or listeners. GitHub Pages serves it from `/docs` on `main`.
 - `pyproject.toml` lists only what the seven phases use. Add a phase's libraries there when the
   phase starts.
 
@@ -86,6 +89,7 @@ Music4All-Onion, Zenodo record 6609677, CC BY 4.0. Listening events come from La
 | `data/processed/tracks.parquet` | one row per Music4All track: title, artist, album, year, language, genre labels and one broad `genre_group` |
 | `data/processed/models/tt_id_refit/neighbours.npy` | each track's 20 nearest tracks, as row numbers into `track_vecs.npy` |
 | `data/processed/demo/index.html` | the demo page. Holds titles and artists: never commit it |
+| `docs/index.html` | the public results page, generated from `reports/*.json` and committed for GitHub Pages |
 | `data/processed/models/als_refit/` | the ALS fit behind the `infer` snapshot, saved by `candidates`: vectors and IDs, settings in `meta.json` |
 | `data/processed/models/{tt_id,als}_newcomers/` | `tt_id` and ALS fitted on both train splits without the listeners in `tt_id_newcomers/held_out_users.npy` |
 | `data/processed/serving/` | the service's bundle: vectors, ranker, features, codes, population numbers, listens, titles, genre names. Holds titles: never commit it or build it into an image |
@@ -164,6 +168,7 @@ python -m m4a_rec.serve curve        # new listeners served from their N most re
 python -m m4a_rec.questionnaire tune     # look-alike neighbours and seed tracks per artist on val, ~2 min; prints
 python -m m4a_rec.questionnaire report   # new listeners served from a form's answers, ~2 min; writes reports/questionnaire.md
 python -m m4a_rec.api                # the API on 127.0.0.1:8000; try it at /docs
+python -m m4a_rec.results_page       # seconds; writes docs/index.html from reports/*.json. Rerun after any report changes
 make docker-build && make docker-run # the same in a container that holds code only
 pytest -q
 pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
@@ -281,8 +286,11 @@ pytest -q tests/test_evaluate.py::test_metrics_hand_checked   # one test
     tests, fixtures, configs or the README. Reports show aggregates only. Tests use
     made-up names.
   - `tracks.parquet` and the demo page stay under `data/`. The demo is never hosted.
+  - The only hosted page is `docs/index.html`, which `results_page.py` builds from
+    `reports/*.json` alone. It may not read `data/` or import a module that does
+    (`tests/test_results_page.py` checks it).
   - When checking this data, print counts and shares, not records.
-  - The README and the demo page carry the full citation.
+  - The README, the demo page and the results page carry the full citation.
   - The API's responses carry titles. It listens on 127.0.0.1 only and is never hosted.
     The Docker image holds code only; the bundle is mounted when it runs. Never push an
     image with data in it. When checking the API, print track IDs and counts, not titles.

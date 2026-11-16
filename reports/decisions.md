@@ -1173,3 +1173,30 @@ The code stays: `serve tune` prints the grid, and `serve report` adds a row and 
 the fold-in without recency weighting whenever a half-life is set.
 Rejected: keeping 10 because the rule chose it, which would ship a service measurably
 worse beyond the top 10; picking a longer half-life now, on `test`'s evidence.
+
+### A public page of totals (2026-11-16)
+
+**`docs/index.html` is a results page that can be hosted, built from `reports/*.json` only.**
+What: `python -m m4a_rec.results_page` reads seven committed reports (`ranker`,
+`listens_curve`, `questionnaire`, `coldstart`, `bias`, `bias_tuning`, `serving`), keeps
+only the fields the page draws, and fills the template `results_page.html`. The page
+shows the model comparison with intervals, the ranker's SHAP values, new listeners by
+number of recent tracks and by form, cold start, slot and discovery shares by
+popularity and genre group, the popularity penalty's trade-off, and request times, with
+a switch between `val` and `test`. GitHub Pages serves it from `/docs` on `main`.
+Why: the local demo holds titles and artists from Music4All, so it cannot be hosted
+(Phase 6 rejected a public demo for that reason). Everything in these reports is already
+public in the repository and is a total over thousands of listeners, so a page made from
+them publishes nothing new. This revises the Phase 6 rejection for a page without
+titles only; the local demo is still never hosted.
+How it is kept to totals: `results_page.py` reads only `reports/` and writes only
+`docs/`, imports no module that reads the data, and passes on only listed fields, so an
+extra field in a report never reaches the page. `tests/test_results_page.py` checks all
+three. The genre-group names on the page come from the keyword rules in
+`configs/metadata.yaml`, as in `bias.md`. The page carries both citations, as the
+Music4All agreement asks wherever results are published.
+Rejected: example listeners shown by track ID and Onion's genre tags, which would put
+per-listener `test` lists on a public page while saying little without titles; a chart
+library from a CDN, which would make the page depend on a third party and send its
+readers' requests there (the charts are inline SVG drawn by the page itself, about 70 KB
+in all); the PNG figures alone, which already sit in the README.
